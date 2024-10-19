@@ -65,10 +65,10 @@ install_wazuh_agent() {
 
     if [ "$distro" == "debian" ] || [ "$distro" == "ubuntu" ] || [ "$distro" == "kali" ]; then
         if [ "$arch" == "amd64" ]; then
-            wget -O wazuh-agent_nixguard_amd64.deb https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_4.7.4-1_amd64.deb
+            wget -O wazuh-agent_nixguard_amd64.deb https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_4.9.1-1_amd64.deb
             sudo WAZUH_MANAGER="$WAZUH_MANAGER" WAZUH_AGENT_NAME="$WAZUH_AGENT_NAME" dpkg -i ./wazuh-agent_nixguard_amd64.deb
         elif [ "$arch" == "aarch64" ]; then
-            wget -O wazuh-agent_nixguard_arm64.deb https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_4.7.4-1_arm64.deb
+            wget -O wazuh-agent_nixguard_arm64.deb https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_4.9.1-1_arm64.deb
             sudo WAZUH_MANAGER="$WAZUH_MANAGER" WAZUH_AGENT_NAME="$WAZUH_AGENT_NAME" dpkg -i ./wazuh-agent_nixguard_arm64.deb
         fi
             # Define the path to the OSSEC configuration file
@@ -86,8 +86,21 @@ install_wazuh_agent() {
                 !/<enrollment>/ { print }
             ' "$ossecConfPath" > temp_ossec.conf && sudo mv temp_ossec.conf "$ossecConfPath"
 
-            # Define the new directory to monitor
-            newDirectory="<directories check_all=\"yes\" realtime=\"yes\">/root</directories>"
+            # Define the new directories to monitor
+            directories=(
+                "<directories check_all=\"yes\" realtime=\"yes\">/root</directories>"
+                "<directories check_all=\"yes\" realtime=\"yes\">/etc</directories>"
+                "<directories check_all=\"yes\" realtime=\"yes\">/var</directories>"
+                "<directories check_all=\"yes\" realtime=\"yes\">/usr</directories>"
+                "<directories check_all=\"yes\" realtime=\"yes\">/home</directories>"
+                "<directories check_all=\"yes\" realtime=\"yes\">/boot</directories>"
+                "<directories check_all=\"yes\" realtime=\"yes\">/tmp</directories>"
+                "<directories check_all=\"yes\" realtime=\"yes\">/opt</directories>"
+                "<directories check_all=\"yes\" realtime=\"yes\">/sbin</directories>"
+                "<directories check_all=\"yes\" realtime=\"yes\">/bin</directories>"
+                "<directories check_all=\"yes\" realtime=\"yes\">/lib</directories>"
+                "<directories check_all=\"yes\" realtime=\"yes\">/lib64</directories>"
+            )
 
             # Check if the syscheck section exists
             if ! sudo grep -q "<syscheck>" $ossecConfPath; then
@@ -96,7 +109,9 @@ install_wazuh_agent() {
             fi
 
             # Add the new directory monitoring configuration
-            sudo sed -i "/<syscheck>/a \ \ $newDirectory" $ossecConfPath
+            for directory in "${directories[@]}"; do
+                sudo sed -i "/<syscheck>/a \ \ $directory" $ossecConfPath
+            done
 
             echo "Directory monitoring configuration added successfully."
 
@@ -133,10 +148,10 @@ install_wazuh_agent() {
             echo "NixGuard agent setup successfully."
     elif [ "$distro" == "centos" ] || [ "$distro" == "rhel" ] || [ "$distro" == "fedora" ]; then
         if [ "$arch" == "amd64" ]; then
-            curl -O wazuh-agent_nixguard.x86_64.rpm https://packages.wazuh.com/4.x/yum/wazuh-agent-4.7.4-1.x86_64.rpm
+            curl -O wazuh-agent_nixguard.x86_64.rpm https://packages.wazuh.com/4.x/yum/wazuh-agent-4.9.1-1.x86_64.rpm
             sudo WAZUH_MANAGER="$WAZUH_MANAGER" WAZUH_AGENT_NAME="$WAZUH_AGENT_NAME" rpm -ihv wazuh-agent_nixguard.x86_64.rpm
         elif [ "$arch" == "aarch64" ]; then
-            curl -O wazuh-agent_nixguard.aarch64.rpm https://packages.wazuh.com/4.x/yum/wazuh-agent-4.7.4-1.aarch64.rpm
+            curl -O wazuh-agent_nixguard.aarch64.rpm https://packages.wazuh.com/4.x/yum/wazuh-agent-4.9.1-1.aarch64.rpm
             sudo WAZUH_MANAGER="$WAZUH_MANAGER" WAZUH_AGENT_NAME="$WAZUH_AGENT_NAME" rpm -ihv wazuh-agent_nixguard.aarch64.rpm
         fi
     else
