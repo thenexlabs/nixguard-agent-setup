@@ -146,12 +146,30 @@ if (-not $syscheckNode) {
 # Find the comment and add the new directory after it
 $commentNode = $ossecConf.ossec_config.syscheck.SelectSingleNode("comment()[contains(.,'<!-- Default files to be monitored. -->')]")
 if ($commentNode) {
-    $newDirectoryNode = $ossecConf.CreateElement("directories")
-    $newDirectoryNode.SetAttribute("check_all", "yes")
-    $newDirectoryNode.SetAttribute("whodata", "yes")
-    $newDirectoryNode.SetAttribute("realtime", "yes")
-    $newDirectoryNode.InnerText = "$env:USERPROFILE\Downloads"
-    $syscheckNode.InsertAfter($newDirectoryNode, $commentNode) | Out-Null
+    $directories = @(
+        "$env:WINDIR",
+        "$env:ProgramFiles",
+        "$env:ProgramFiles(x86)",
+        "HKEY_LOCAL_MACHINE\SYSTEM",
+        "$env:WINDIR\System32",
+        "$env:WINDIR\SysWOW64",
+        "$env:USERPROFILE",
+        "$env:ProgramData",
+        "$env:ProgramFiles\Common Files",
+        "$env:ProgramFiles(x86)\Common Files",
+        "$env:WINDIR\Boot",
+        "$env:WINDIR\Temp",
+        "$env:USERPROFILE\Downloads"
+    )
+
+    foreach ($directory in $directories) {
+        $newDirectoryNode = $ossecConf.CreateElement("directories")
+        $newDirectoryNode.SetAttribute("check_all", "yes")
+        $newDirectoryNode.SetAttribute("whodata", "yes")
+        $newDirectoryNode.SetAttribute("realtime", "yes")
+        $newDirectoryNode.InnerText = $directory
+        $syscheckNode.InsertAfter($newDirectoryNode, $commentNode) | Out-Null
+    }
 } else {
     $fragment = $ossecConf.CreateDocumentFragment()
     $fragment.InnerXml = $newDirectory
@@ -159,7 +177,6 @@ if ($commentNode) {
 }
 
 $ossecConf.Save($configPath)
-
 Write-Host "Directory monitoring configuration added successfully."
 
 ###########################################################################################
