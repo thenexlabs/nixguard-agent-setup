@@ -1,3 +1,12 @@
+# Check if the system is 64-bit or 32-bit
+if ([IntPtr]::Size -eq 8) {
+    # For 64-bit Windows
+    $ossecAgentPath = "C:\\Program Files (x86)\\ossec-agent"
+} else {
+    # For 32-bit Windows
+    $ossecAgentPath = "C:\\Program Files\\ossec-agent"
+}
+
 # Define the script as a function
 function Uninstall-WazuhAgent {
     # Stop the Wazuh service
