@@ -14,6 +14,7 @@ if ([IntPtr]::Size -eq 8) {
 
 $configPath = $ossecAgentPath + "\\ossec.conf"
 
+# Define the script as a function
 function Uninstall-WazuhAgent {
     # Stop the Wazuh service
     Stop-Service -Name "WazuhSvc" -ErrorAction SilentlyContinue
@@ -30,11 +31,18 @@ function Uninstall-WazuhAgent {
     # Ensure the uninstallation is complete
     Start-Sleep -Seconds 10
 
+    # Debugging output
+    Write-Output "Attempting to remove $ossecAgentPath"
+
     # Remove the Wazuh agent installation directory
     Remove-Item -Recurse -Force $ossecAgentPath -ErrorAction SilentlyContinue
 
-    # Remove the Wazuh agent installation directory
-    Remove-Item -Recurse -Force "C:\wazuh-agent" -ErrorAction SilentlyContinue
+    # Verify if the directory was removed
+    if (-Not (Test-Path -Path $ossecAgentPath)) {
+        Write-Output "$ossecAgentPath was successfully removed."
+    } else {
+        Write-Error "$ossecAgentPath could not be removed."
+    }
 }
 
 # run Uninstall-WazuhAgent function
