@@ -24,12 +24,20 @@ detect_distro_arch() {
 
 # Function to uninstall Wazuh agent
 uninstall_wazuh_agent() {
-    if [ "$distro" == "debian" ] || [ "$distro" == "ubuntu" ]; then
-        sudo systemctl stop wazuh-agent
-        sudo dpkg -r wazuh-agent
+    if [ "$distro" == "debian" ] || [ "$distro" == "ubuntu" ] || [ "$distro" == "kali" ]; then
+        if systemctl list-units --full --all | grep -Fq 'wazuh-agent'; then
+            sudo systemctl stop wazuh-agent
+            sudo dpkg -r wazuh-agent
+        else
+            echo "wazuh-agent is not installed"
+        fi
     elif [ "$distro" == "centos" ] || [ "$distro" == "rhel" ] || [ "$distro" == "fedora" ]; then
-        sudo systemctl stop wazuh-agent
-        sudo rpm -e wazuh-agent
+        if systemctl list-units --full --all | grep -Fq 'wazuh-agent'; then
+            sudo systemctl stop wazuh-agent
+            sudo rpm -e wazuh-agent
+        else
+            echo "wazuh-agent is not installed"
+        fi
     else
         echo "Unsupported distribution: $distro"
         exit 1

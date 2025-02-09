@@ -147,6 +147,28 @@ add_new_directories() {
     echo "New <directories> tags have been added after the comment containing the word 'Directories'."
 }
 
+add_ignore_directories() {
+    local ossecConfPath=$1
+    shift
+    local ignore_directories=("$@")
+
+    # Check if the syscheck section exists
+    if ! sudo grep -q "<syscheck>" $ossecConfPath; then
+        # If syscheck section does not exist, create it
+        sudo sed -i '/<\/ossec_config>/i \ \ <syscheck>\n\ \ </syscheck>' $ossecConfPath
+    fi
+
+    # Find the line number of the comment containing the words "Files/directories to ignore"
+    local line_number=$(sudo grep -n "<!-- Files/directories to ignore -->" $ossecConfPath | cut -d: -f1)
+
+    # Insert the new ignore directories after the comment
+    for (( i=${#ignore_directories[@]}-1 ; i>=0 ; i-- )); do
+        sudo sed -i "${line_number}a \ \ ${ignore_directories[$i]}" $ossecConfPath
+    done
+
+    echo "New <ignore> tags have been added after the comment 'Files/directories to ignore'."
+}
+
 # Function to install Wazuh agent
 install_wazuh_agent() {
     local WAZUH_MANAGER="$MANAGER_IP"
@@ -200,11 +222,25 @@ install_wazuh_agent() {
 
         # Excluding the /tmp directory as it typically contains many transient files
 
+        # Adding the ignore tag for /home/.cache
+        ignore_directories=(
+            "<ignore>${HOME}/.mozilla</ignore>"
+            "<ignore>${HOME}/.cache</ignore>"
+            "<ignore>${HOME}/.config</ignore>"
+            "<ignore>${HOME}/.local</ignore>"
+            "<ignore>${HOME}/.xsession-errors</ignore>"
+            "<ignore>/root/.wget-hsts</ignore>"
+            "<ignore>/root/.rpmdb</ignore>"
+        )
+
         # Function to remove old directories tags
         remove_directories_tags $ossecConfPath
 
         # Function to add new directories tags
         add_new_directories $ossecConfPath "${directories[@]}"
+
+        # Function to add ignore directories tags
+        add_ignore_directories $ossecConfPath "${ignore_directories[@]}"
 
         echo "Directory monitoring configuration added successfully."
 
@@ -225,16 +261,16 @@ install_wazuh_agent() {
         removeThreatUrl="https://github.com/thenexlabs/nixguard-agent-setup/raw/main/linux/remove-threat.sh"
 
         # Define the destination directory
-        destDir="~/var/ossec/active-response/bin"
+        destDir="/var/ossec/active-response/bin"
 
         # Define the path to save the remove-threat.sh script in the destination directory
         removeThreatPath="$destDir/remove-threat.sh"
 
         # Download the remove-threat.sh script
-        sudo wget -o $removeThreatPath $removeThreatUrl
+        sudo wget -O $removeThreatPath $removeThreatUrl
 
-        sudo chmod 750 ~/var/ossec/active-response/bin/remove-threat.sh
-        sudo chown root:wazuh ~/var/ossec/active-response/bin/remove-threat.sh
+        sudo chmod 750 /var/ossec/active-response/bin/remove-threat.sh
+        sudo chown root:wazuh /var/ossec/active-response/bin/remove-threat.sh
 
         echo "Virus threat response configuration added successfully."
 
