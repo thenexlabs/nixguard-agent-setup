@@ -148,11 +148,6 @@ $config = Get-Content -Path $configPath
 $config = $config -replace '<address>0.0.0.0</address>', "<address>$ipAddress</address>"
 Set-Content -Path $configPath -Value $config
 
-# Update the ossec.conf file
-$config = Get-Content -Path $configPath
-$config = $config -replace '<address>0.0.0.0</address>', "<address>$ipAddress</address>"
-Set-Content -Path $configPath -Value $config
-
 # Define the enrollment section
 $enrollmentSection = @"
 <enrollment>
