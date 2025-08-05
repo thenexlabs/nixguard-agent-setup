@@ -232,7 +232,8 @@ if ($decodedPayload -ne $null) {
     )
 
     foreach ($standard in $requiredStandards) {
-        if ($decodedPayload.cybersecurityPreferences.complianceStandards -contains $standard) {            $requiresEncryption = $true
+        if ($decodedPayload.cybersecurityPreferences.complianceStandards -contains $standard) {            
+            $requiresEncryption = $true
             break
         }
     }
@@ -244,6 +245,9 @@ if ($decodedPayload -ne $null) {
         $bitlockerScriptUrl = "https://github.com/thenexlabs/nixguard-agent-setup/raw/main/windows/scripts/bitlocker_check.ps1"
         $wazuhAgentPath = "C:\Program Files (x86)\ossec-agent"
         $destinationScriptPath = Join-Path $wazuhAgentPath "bitlocker_check.ps1"
+
+        # Kill the cached file
+        Remove-Item -Path (Join-Path $wazuhAgentPath "bitlocker_check.ps1") -ErrorAction SilentlyContinue
         
         # Download the PowerShell check script from GitHub ---
         # This script now writes its output to a file instead of the console.
