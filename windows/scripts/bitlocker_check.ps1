@@ -1,69 +1,82 @@
 # bitlocker_check.ps1
-# This script robustly checks BitLocker status and writes the output to a log file.
+# A hardened script that checks BitLocker status and ensures a compliant or non-compliant state is always reported.
+# The final output path and JSON structure are immutable to match the Wazuh parser.
+
+# --- Section 1: Pre-flight Checks & Environment Setup ---
 
 $logDir = "C:\ProgramData\Wazuh\logs"
-# Ensure the directory exists before we do anything else. This is the fix.
+# Ensure the log directory exists. This is a fatal-on-failure check.
 try {
     if (-not (Test-Path -Path $logDir)) {
-        # The -Force switch creates the entire path (C:\ProgramData\Wazuh\logs) if needed.
         New-Item -Path $logDir -ItemType Directory -Force -ErrorAction Stop | Out-Null
     }
 }
 catch {
-    # If we can't create the directory, the script cannot succeed. Exit immediately.
-    Write-Error "CRITICAL FAILURE: Could not create log directory at '$logDir'. Error: $($_.Exception.Message)"
+    Write-Error "FATAL: Could not create log directory at '$logDir'. Error: $($_.Exception.Message)"
     exit 1
 }
 
-try {
-    if (-not (Get-Module -ListAvailable -Name BitLocker)) {
-        throw "BitLocker PowerShell module is not available."
-    }
-    $allFixedVolumes = Get-CimInstance -ClassName Win32_Volume -Filter "DriveType=3"
-    $validDriveLetters = @()
-    if ($null -ne $allFixedVolumes) {
-        foreach ($volume in $allFixedVolumes) {
-            if (-not [string]::IsNullOrWhiteSpace($volume.DriveLetter)) {
-                $validDriveLetters += $volume.DriveLetter
-            }
-        }
-    }
-    if ($validDriveLetters.Count -eq 0) {
-        throw "Found fixed volumes, but none have an assigned drive letter to check for BitLocker status."
-    }
-    
-    # This compatible filter works on all systems, regardless of drive name
-    $bitlockerVolumes = Get-BitLockerVolume | Where-Object { $_.VolumeType -eq 'Fixed' }
 
-    if ($null -eq $bitlockerVolumes -or $bitlockerVolumes.Count -eq 0) {
-        $output = @{ "bitlocker_status" = @{ "state" = "not_found"; "message" = "No BitLocker-managed volumes found on fixed drives." } }
-    } else {
-        $volume_reports = @()
-        foreach ($volume in $bitlockerVolumes) {
-            $volume_report = @{
-                "mount_point" = $volume.MountPoint;
-                "protection_status" = $volume.ProtectionStatus.ToString();
-                "volume_status" = $volume.VolumeStatus.ToString();
-                "encryption_method" = $volume.EncryptionMethod.ToString();
-                "key_protectors" = ($volume.KeyProtector | ForEach-Object { $_.KeyProtectorType.ToString() }) -join ','
-            }
-            $volume_reports += $volume_report
+# --- Section 2: Core Logic - Get BitLocker Status ---
+
+$output = try {
+    if (-not (Get-Module -ListAvailable -Name BitLocker)) {
+        throw "BitLocker PowerShell module is not available on this system."
+    }
+
+    # Use the most compatible method to get all BitLocker-managed fixed drives.
+    $bitlockerVolumes = Get-BitLockerVolume -ErrorAction SilentlyContinue | Where-Object { $_.VolumeType -eq 'Fixed' }
+
+    if ($null -eq $bitlockerVolumes) {
+        #
+        # --- THIS IS THE CRITICAL FIX ---
+        # A machine with no BitLocker volumes IS a security failure.
+        # We will now create a failure report that the existing Wazuh rules WILL catch.
+        #
+        $systemDrive = (Get-CimInstance -ClassName Win32_OperatingSystem).SystemDrive
+        $failure_report = @{
+            "mount_point"       = $systemDrive;
+            "protection_status" = "Off"; # This will trigger rule 100102
+            "volume_status"     = "FullyDecrypted"; # This will trigger rule 100103
+            "encryption_method" = "None";
+            "key_protectors"    = ""
         }
-        $output = @{ "bitlocker_status" = @{ "state" = "success"; "volumes" = $volume_reports } }
+        # The script's state is "success" because it successfully discovered a non-compliant state.
+        @{ "bitlocker_status" = @{ "state" = "success"; "volumes" = @($failure_report) } }
+    }
+    else {
+        # If volumes were found, process them normally.
+        $volume_reports = foreach ($volume in $bitlockerVolumes) {
+            @{
+                "mount_point"       = $volume.MountPoint;
+                "protection_status" = $volume.ProtectionStatus.ToString();
+                "volume_status"     = $volume.VolumeStatus.ToString();
+                "encryption_method" = $volume.EncryptionMethod.ToString();
+                "key_protectors"    = ($volume.KeyProtector | ForEach-Object { $_.KeyProtectorType.ToString() }) -join ','
+            }
+        }
+        # Build the success object with the exact required schema.
+        @{ "bitlocker_status" = @{ "state" = "success"; "volumes" = $volume_reports } }
     }
 }
 catch {
-    $output = @{ "bitlocker_status" = @{ "state" = "error"; "message" = "Script failed to execute. Error: $($_.Exception.Message)" } }
+    # This block handles SCRIPT EXECUTION errors, not compliance states.
+    @{ "bitlocker_status" = @{ "state" = "error"; "message" = "Script failed during execution. Error: $($_.Exception.Message)" } }
 }
+
+
+# --- Section 3: The Atomic Write Transaction ---
+# This safely writes the $output variable to the immutable log file path.
 
 $finalLogFile = Join-Path -Path $logDir -ChildPath "bitlocker_status.log"
 $tempLogFile = Join-Path -Path $logDir -ChildPath "bitlocker_status.tmp"
 
-# 1. Convert the final object to JSON
-$finalJson = ConvertTo-Json -InputObject $output -Compress -Depth 5
-
-# 2. Write the JSON to a temporary file.
-$finalJson | Out-File -FilePath $tempLogFile -Encoding utf8
-
-# 3. Rename the temporary file to the final file name. This is an atomic operation.
-Move-Item -Path $tempLogFile -Destination $finalLogFile -Force
+try {
+    $finalJson = $output | ConvertTo-Json -Compress -Depth 5
+    $finalJson | Out-File -FilePath $tempLogFile -Encoding utf8 -NoNewline
+    Move-Item -Path $tempLogFile -Destination $finalLogFile -Force
+}
+catch {
+    Write-Error "FATAL: FAILED to write the final log file at '$finalLogFile'. Check disk space or AV logs. Error: $($_.Exception.Message)"
+    exit 1
+}
