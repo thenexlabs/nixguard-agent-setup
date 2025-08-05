@@ -1,7 +1,6 @@
 # bitlocker_check.ps1
 # This script robustly checks BitLocker status and writes the output to a log file.
 
-# --- THIS IS THE NEW, ROBUST LOG DIRECTORY SETUP ---
 $logDir = "C:\ProgramData\Wazuh\logs"
 # Ensure the directory exists before we do anything else. This is the fix.
 try {
@@ -15,10 +14,7 @@ catch {
     Write-Error "CRITICAL FAILURE: Could not create log directory at '$logDir'. Error: $($_.Exception.Message)"
     exit 1
 }
-# --- End of new code block ---
 
-
-# --- The rest of your script now runs safely ---
 try {
     if (-not (Get-Module -ListAvailable -Name BitLocker)) {
         throw "BitLocker PowerShell module is not available."
@@ -59,8 +55,6 @@ try {
 catch {
     $output = @{ "bitlocker_status" = @{ "state" = "error"; "message" = "Script failed to execute. Error: $($_.Exception.Message)" } }
 }
-
-# --- This section now works reliably because the directory is guaranteed to exist ---
 
 $finalLogFile = Join-Path -Path $logDir -ChildPath "bitlocker_status.log"
 $tempLogFile = Join-Path -Path $logDir -ChildPath "bitlocker_status.tmp"
