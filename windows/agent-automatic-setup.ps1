@@ -267,7 +267,6 @@ if ($decodedPayload -ne $null) {
         # ====================================================================================
         Write-Host "Creating a reliable, repeating Scheduled Task for BitLocker monitoring..."
         try {
-            # Define the action: run the PowerShell script.
             # Define the action with the ExecutionPolicy Bypass flag
             $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-ExecutionPolicy Bypass -File `"$destinationScriptPath`""
 
