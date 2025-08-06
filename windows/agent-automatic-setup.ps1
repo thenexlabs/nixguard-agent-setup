@@ -245,9 +245,6 @@ if ($decodedPayload -ne $null) {
         $bitlockerScriptUrl = "https://github.com/thenexlabs/nixguard-agent-setup/raw/main/windows/scripts/bitlocker_check.ps1"
         $wazuhAgentPath = "C:\Program Files (x86)\ossec-agent"
         $destinationScriptPath = Join-Path $wazuhAgentPath "bitlocker_check.ps1"
-
-        # Kill the cached file
-        Remove-Item -Path (Join-Path $wazuhAgentPath "bitlocker_check.ps1") -ErrorAction SilentlyContinue
         
         # Download the PowerShell check script from GitHub ---
         # This script now writes its output to a file instead of the console.
@@ -271,7 +268,8 @@ if ($decodedPayload -ne $null) {
         Write-Host "Creating a reliable, repeating Scheduled Task for BitLocker monitoring..."
         try {
             # Define the action: run the PowerShell script.
-            $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-File `"$destinationScriptPath`""
+            # Define the action with the ExecutionPolicy Bypass flag
+            $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-ExecutionPolicy Bypass -File `"$destinationScriptPath`""
 
             # --- THIS IS THE CORRECTED TRIGGER LOGIC ---
             # We create a trigger that starts in one minute and repeats every 5 minutes indefinitely.
