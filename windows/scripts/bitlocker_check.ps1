@@ -29,13 +29,11 @@ $output = try {
     # Use the most compatible method to get all BitLocker-managed fixed drives.
     $bitlockerVolumes = Get-BitLockerVolume -ErrorAction SilentlyContinue | Where-Object { $_.VolumeType -eq 'Fixed' }
 
-    # --- THE FIX ---
     # Add a unique, high-precision timestamp to every log entry.
     # This defeats the agent's de-duplication and forces it to send every event.
     $eventTimestamp = Get-Date -Format "o" # ISO 8601 format, e.g., 2025-08-06T08:20:23.1234567Z
 
     if ($null -eq $bitlockerVolumes) {
-        # ... (your existing failure_report logic)
         $systemDrive = (Get-CimInstance -ClassName Win32_OperatingSystem).SystemDrive
         $failure_report = @{
             "mount_point"       = $systemDrive;
@@ -48,7 +46,6 @@ $output = try {
         @{ "bitlocker_status" = @{ "timestamp" = $eventTimestamp; "state" = "success"; "volumes" = @($failure_report) } }
     }
     else {
-        # ... (your existing volume_reports logic)
         $volume_reports = foreach ($volume in $bitlockerVolumes) {
             @{
                 "mount_point"       = $volume.MountPoint;
