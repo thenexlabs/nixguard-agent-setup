@@ -85,13 +85,24 @@ fetch_user_preferences() {
 # --- 4. Uninstall Existing Agent (for Idempotency) ---
 uninstall_wazuh_agent() {
     echo "--- Checking for existing Wazuh Agent installation ---"
+    # First, try to gracefully stop any running agent services.
+    if [ -f "/Library/Ossec/bin/wazuh-control" ]; then
+        echo "Stopping any running Wazuh agent services..."
+        /Library/Ossec/bin/wazuh-control stop >/dev/null 2>&1 || true
+    fi
+
+    # Attempt to run the official uninstaller if it exists.
     if [ -f "/Library/Ossec/bin/wazuh-uninstall.sh" ]; then
         echo "Found existing agent. Running official uninstaller..."
-        /Library/Ossec/bin/wazuh-uninstall.sh
-    elif [ -d "/Library/Ossec" ]; then
-        echo "Found legacy agent directory. Forcibly removing..."
-        /Library/Ossec/bin/wazuh-control stop >/dev/null 2>&1 || true
+        /Library/Ossec/bin/wazuh-uninstall.sh >/dev/null 2>&1 || true
+    fi
+    
+    # Finally, forcibly remove the directory to ensure a completely clean state.
+    # This is critical for idempotency and successful re-registration.
+    if [ -d "/Library/Ossec" ]; then
+        echo "Forcibly removing Wazuh agent directory for a clean installation..."
         rm -rf /Library/Ossec
+        echo "Previous installation completely removed."
     else
         echo "Wazuh Agent not found. No uninstallation needed."
     fi
@@ -161,16 +172,11 @@ configure_ossec_conf() {
   <ignore>/Users/*/Videos</ignore>
 </syscheck>
 EOM
-    # Export the multiline string to the environment to be safely read by awk.
-    # This avoids shell expansion issues with the -v flag.
+    # --- FINAL FIX: Use perl for robust multi-line replacement ---
     export SYSCHECK_CONFIG
-    awk '
-        BEGIN { p=1; new_config=ENVIRON["SYSCHECK_CONFIG"] }
-        /<syscheck>/ { if(!x) { print new_config; x=1 }; p=0 }
-        /<\/syscheck>/ { p=1; next }
-        p
-    ' "$ossecConfPath" > "$ossecConfPath.tmp" && mv "$ossecConfPath.tmp" "$ossecConfPath"
-    unset SYSCHECK_CONFIG # Clean up environment
+    perl -i -p0e 's|<syscheck>.*?</syscheck>|$ENV{SYSCHECK_CONFIG}|s' "$ossecConfPath"
+    unset SYSCHECK_CONFIG
+    # --- END FIX ---
 
     echo "Custom FIM configuration applied successfully."
 }
@@ -227,13 +233,34 @@ EOM
   <log_format>json</log_format>
 </localfile>
 EOM
-    awk -v new_config="$FILEVAULT_LOG_CONFIG" '/<\/ossec_config>/ {print new_config} 1' "$ossecConfPath" > "$ossecConfPath.tmp" && mv "$ossecConfPath.tmp" "$ossecConfPath"
+    # --- FINAL FIX: Use perl to insert config before the final tag ---
+    export FILEVAULT_LOG_CONFIG
+    perl -i -p0e 's|(</ossec_config>)|$ENV{FILEVAULT_LOG_CONFIG}\n$1|' "$ossecConfPath"
+    unset FILEVAULT_LOG_CONFIG
+    # --- END FIX ---
 
     echo "FileVault monitoring script installed and scheduled."
 }
 
-
 # --- Main Execution ---
+cleanup_on_failure() {
+    echo "❌ An error occurred during setup." >&2
+    echo "--- Running automatic cleanup ---" >&2
+    # Forcefully uninstall the agent to clean the local state
+    # This ensures the next run can succeed with the same agent name
+    if [ -f "/Library/Ossec/bin/wazuh-control" ]; then
+        /Library/Ossec/bin/wazuh-control stop >/dev/null 2>&1
+    fi
+    if [ -d "/Library/Ossec" ]; then
+        rm -rf /Library/Ossec
+    fi
+    echo "Cleanup complete. The agent has been removed from this machine." >&2
+    # Note: This does not remove the agent from the manager, but allows re-registration.
+}
+
+# Trap any error signal (non-zero exit code) and run the cleanup function.
+trap cleanup_on_failure ERR
+
 echo "Starting NixGuard Agent Setup for macOS..."
 
 uninstall_wazuh_agent
@@ -266,5 +293,7 @@ fi
 
 echo "--- Restarting Wazuh Agent to apply all changes ---"
 /Library/Ossec/bin/wazuh-control restart
+
+trap - ERR
 
 echo "✅ NixGuard agent setup complete and running."
