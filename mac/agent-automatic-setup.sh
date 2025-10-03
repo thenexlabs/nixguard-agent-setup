@@ -8,13 +8,10 @@
 # curl -sS https://.../agent-automatic-setup.sh | sudo bash -s -- <MANAGER_IP> <AGENT_NAME> <API_KEY>
 #
 
-# --- Enable Verbose Debugging ---
 # Exit immediately if any command fails for robust error handling.
 set -e
 # Ensure the ERR trap is inherited by functions, command substitutions, and subshells.
 set -E
-# Print each command to stderr before executing it for full visibility.
-set -x
 
 # --- 1. Validate Input & Define Variables ---
 if [ "$#" -ne 3 ]; then
@@ -139,8 +136,10 @@ configure_ossec_conf() {
     echo "Configuration file found and is not empty."
 
     echo "Applying File Integrity Monitoring (FIM) rules..."
-    read -r -d '' SYSCHECK_CONFIG <<'EOM'
-<!-- NixGuard FIM Monitoring -->
+    
+    # --- FINAL FIX: Use direct assignment for multi-line strings. ---
+    # The 'read << EOM' method fails in the non-interactive 'curl | bash' shell.
+    SYSCHECK_CONFIG='<!-- NixGuard FIM Monitoring -->
 <syscheck>
   <directories check_all="yes" realtime="yes">/Applications</directories>
   <directories check_all="yes" realtime="yes">/System</directories>
@@ -158,13 +157,10 @@ configure_ossec_conf() {
   <ignore>/Users/*/Pictures</ignore>
   <ignore>/Users/*/Music</ignore>
   <ignore>/Users/*/Videos</ignore>
-</syscheck>
-EOM
-    
-    # --- FINAL, SIMPLIFIED FIX: Append the configuration directly. ---
-    # This is the most robust method as it makes no assumptions about the file's contents.
-    echo "$SYSCHECK_CONFIG" >> "$ossecConfPath"
+</syscheck>'
     # --- END FIX ---
+    
+    echo "$SYSCHECK_CONFIG" >> "$ossecConfPath"
 
     echo "Custom FIM configuration applied successfully."
 }
@@ -215,17 +211,16 @@ EOM
     launchctl load "$plistPath"
     
     echo "Configuring agent to monitor FileVault status log..."
-    read -r -d '' FILEVAULT_LOG_CONFIG <<'EOM'
-<!-- NixGuard FileVault Monitoring -->
+    
+    # --- FINAL FIX: Use direct assignment for multi-line strings. ---
+    FILEVAULT_LOG_CONFIG='<!-- NixGuard FileVault Monitoring -->
 <localfile>
   <location>/Library/Ossec/logs/filevault_status.log</location>
   <log_format>json</log_format>
-</localfile>
-EOM
-    
-    # --- FINAL, SIMPLIFIED FIX: Append the configuration directly. ---
-    echo "$FILEVAULT_LOG_CONFIG" >> "$ossecConfPath"
+</localfile>'
     # --- END FIX ---
+    
+    echo "$FILEVAULT_LOG_CONFIG" >> "$ossecConfPath"
 
     echo "FileVault monitoring script installed and scheduled."
 }
