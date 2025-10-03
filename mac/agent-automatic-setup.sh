@@ -37,11 +37,15 @@ AGENT_NAME="${AGENT_NAME_BASE}-${UNIQUE_SUFFIX}"
 echo "Final agent name will be: ${AGENT_NAME}"
 
 # URLs
+REPO_BASE_URL="https://raw.githubusercontent.com/thenexlabs/nixguard-agent-setup/main/mac"
 WAZUH_PKG_URL_INTEL="https://packages.wazuh.com/4.x/macos/wazuh-agent-4.7.4-1.intel64.pkg"
 WAZUH_PKG_URL_ARM="https://packages.wazuh.com/4.x/macos/wazuh-agent-4.7.4-1.arm64.pkg"
-AR_SCRIPT_URL="https://raw.githubusercontent.com/thenexlabs/nixguard-agent-setup/main/mac/remove-threat.sh"
-FILEVAULT_SCRIPT_URL="https://raw.githubusercontent.com/thenexlabs/nixguard-agent-setup/main/mac/scripts/filevault_check.sh"
+AR_SCRIPT_URL="${REPO_BASE_URL}/remove-threat.sh"
+FILEVAULT_SCRIPT_URL="${REPO_BASE_URL}/scripts/filevault_check.sh"
 GET_USER_API_URL="https://api.thenex.world/get-user"
+# --- FINAL FIX: URLs for external configuration files ---
+FIM_CONF_URL="${REPO_BASE_URL}/config/fim.conf"
+FILEVAULT_CONF_URL="${REPO_BASE_URL}/config/filevault.conf"
 
 
 # --- 2. Dependency Management ---
@@ -51,7 +55,6 @@ check_dependencies() {
         echo "jq is not installed. Attempting to install with Homebrew..."
         if ! command -v brew &> /dev/null; then
             echo "Warning: Homebrew not found. Cannot install jq." >&2
-            echo "FileVault monitoring will be enabled by default as a security fallback."
             return 1
         fi
         brew install jq
@@ -135,33 +138,10 @@ configure_ossec_conf() {
     fi
     echo "Configuration file found and is not empty."
 
-    echo "Applying File Integrity Monitoring (FIM) rules..."
+    echo "Applying File Integrity Monitoring (FIM) rules by downloading config..."
+    # --- FINAL FIX: Download the config and append it. This is the most robust method. ---
+    curl -sS "$FIM_CONF_URL" >> "$ossecConfPath"
     
-    # --- FINAL FIX: Use direct assignment for multi-line strings. ---
-    # The 'read << EOM' method fails in the non-interactive 'curl | bash' shell.
-    SYSCHECK_CONFIG='<!-- NixGuard FIM Monitoring -->
-<syscheck>
-  <directories check_all="yes" realtime="yes">/Applications</directories>
-  <directories check_all="yes" realtime="yes">/System</directories>
-  <directories check_all="yes" realtime="yes">/Library</directories>
-  <directories check_all="yes" realtime="yes">/Users/Shared</directories>
-  <directories check_all="yes" realtime="yes" whodata="yes">/private/etc</directories>
-  <directories check_all="yes" realtime="yes" whodata="yes">/usr/local/bin</directories>
-  <directories check_all="yes" realtime="yes" whodata="yes">/usr/local/sbin</directories>
-  <directories check_all="yes" realtime="yes" whodata="yes">/Users/%(user)/Downloads</directories>
-  <directories check_all="yes" realtime="yes" whodata="yes">/Users/%(user)/Desktop</directories>
-  <directories check_all="yes" realtime="yes" whodata="yes">/Users/%(user)/Documents</directories>
-  <ignore>/private/var/log/wazuh</ignore>
-  <ignore type="sregex">.log$|.swp$|.DS_Store$</ignore>
-  <ignore>/Users/*/Library</ignore>
-  <ignore>/Users/*/Pictures</ignore>
-  <ignore>/Users/*/Music</ignore>
-  <ignore>/Users/*/Videos</ignore>
-</syscheck>'
-    # --- END FIX ---
-    
-    echo "$SYSCHECK_CONFIG" >> "$ossecConfPath"
-
     echo "Custom FIM configuration applied successfully."
 }
 
@@ -188,10 +168,10 @@ install_filevault_monitoring() {
     chmod 750 "$scriptPath"
     chown root:wazuh "$scriptPath"
 
-    read -r -d '' LAUNCHD_PLIST <<EOM
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
+    # The LAUNCHD_PLIST is simple enough that direct assignment is safe.
+    LAUNCHD_PLIST="<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
+<plist version=\"1.0\">
 <dict>
     <key>Label</key>
     <string>com.nixguard.filevaultcheck</string>
@@ -202,25 +182,16 @@ install_filevault_monitoring() {
     <key>StandardErrorPath</key><string>/dev/null</string>
     <key>StandardOutPath</key><string>/dev/null</string>
 </dict>
-</plist>
-EOM
+</plist>"
     echo "$LAUNCHD_PLIST" > "$plistPath"
     chown root:wheel "$plistPath"
     chmod 644 "$plistPath"
     launchctl unload "$plistPath" || true
     launchctl load "$plistPath"
     
-    echo "Configuring agent to monitor FileVault status log..."
-    
-    # --- FINAL FIX: Use direct assignment for multi-line strings. ---
-    FILEVAULT_LOG_CONFIG='<!-- NixGuard FileVault Monitoring -->
-<localfile>
-  <location>/Library/Ossec/logs/filevault_status.log</location>
-  <log_format>json</log_format>
-</localfile>'
-    # --- END FIX ---
-    
-    echo "$FILEVAULT_LOG_CONFIG" >> "$ossecConfPath"
+    echo "Configuring agent to monitor FileVault status log by downloading config..."
+    # --- FINAL FIX: Download the config and append it. ---
+    curl -sS "$FILEVAULT_CONF_URL" >> "$ossecConfPath"
 
     echo "FileVault monitoring script installed and scheduled."
 }
@@ -250,7 +221,10 @@ install_ar_script
 
 # --- Intelligent Feature Deployment ---
 ENCRYPTION_REQUIRED=false
-if check_dependencies; then
+# Default to true if dependency check fails
+if ! check_dependencies; then
+    ENCRYPTION_REQUIRED=true
+else
     COMPLIANCE_STANDARDS=$(fetch_user_preferences "$API_KEY")
     REQUIRED_STANDARDS=("soc2" "nist_sp_800_53" "iso27001" "gdpr" "hipaa" "pci_dss" "pipeda" "cis_controls")
     
@@ -261,12 +235,12 @@ if check_dependencies; then
             break
         fi
     done
-else
-    ENCRYPTION_REQUIRED=true
 fi
 
 if [ "$ENCRYPTION_REQUIRED" = true ]; then
     install_filevault_monitoring
+else
+    echo "User's compliance standards do not require encryption monitoring. Skipping."
 fi
 
 echo "--- Restarting Wazuh Agent to apply all changes ---"
