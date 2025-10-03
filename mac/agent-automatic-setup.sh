@@ -8,10 +8,14 @@
 # curl -sS https://.../agent-automatic-setup.sh | sudo bash -s -- <MANAGER_IP> <AGENT_NAME> <API_KEY>
 #
 
+# --- FINAL FIX: Enable xtrace for verbose debugging ---
 # Exit immediately if any command fails for robust error handling.
 set -e
 # Ensure the ERR trap is inherited by functions, command substitutions, and subshells.
 set -E
+# Print each command to stderr before executing it.
+set -x
+# --- END FIX ---
 
 # --- 1. Validate Input & Define Variables ---
 if [ "$#" -ne 3 ]; then
@@ -62,8 +66,8 @@ check_dependencies() {
 
 # --- 3. Fetch User Compliance Preferences ---
 fetch_user_preferences() {
-    local user_api_key="$1"
     echo "--- Fetching user compliance preferences ---"
+    local user_api_key="$1"
     local api_payload=$(printf '{"apiKey":"%s"}' "$user_api_key")
     local response=$(curl --request POST --header "Content-Type: application/json" --silent --show-error --data "$api_payload" "$GET_USER_API_URL")
     local jwt_payload=$(echo "$response" | jq -r '.token | split(".")[1] | @base64d | fromjson')
@@ -113,11 +117,29 @@ install_and_register_agent() {
     echo "Agent successfully registered."
 }
 
+# --- FINAL FIX: New robust function to append config blocks ---
+append_config_block() {
+    local config_block="$1"
+    local ossecConfPath="/Library/Ossec/etc/ossec.conf"
+    local tmpConfPath="/tmp/ossec.conf.append.tmp"
+
+    # Copy the file, excluding the final closing tag
+    grep -v "</ossec_config>" "$ossecConfPath" > "$tmpConfPath"
+    
+    # Append the new configuration block
+    echo "$config_block" >> "$tmpConfPath"
+    
+    # Add the closing tag back
+    echo "</ossec_config>" >> "$tmpConfPath"
+
+    # Replace the original file
+    mv "$tmpConfPath" "$ossecConfPath"
+}
+
 # --- 6. Apply Custom FIM and Log Collection Configuration ---
 configure_ossec_conf() {
     echo "--- Applying custom NixGuard configuration ---"
     local ossecConfPath="/Library/Ossec/etc/ossec.conf"
-    local tmpConfPath="/tmp/ossec.conf.tmp"
     local timeout=30
     local counter=0
     echo "Waiting for configuration file to be created and populated..."
@@ -138,6 +160,7 @@ configure_ossec_conf() {
 
     echo "Applying File Integrity Monitoring (FIM) rules..."
     read -r -d '' SYSCHECK_CONFIG <<'EOM'
+<!-- NixGuard FIM Monitoring -->
 <syscheck>
   <directories check_all="yes" realtime="yes">/Applications</directories>
   <directories check_all="yes" realtime="yes">/System</directories>
@@ -158,27 +181,8 @@ configure_ossec_conf() {
 </syscheck>
 EOM
     
-    # --- FINAL FIX: Rebuild the config file from scratch for maximum reliability ---
-    # Get the line number *before* the <syscheck> block starts
-    local start_line=$(grep -n -m 1 "<syscheck>" "$ossecConfPath" | cut -d: -f1)
-    local head_count=$((start_line - 1))
-    
-    # Get the line number *after* the </syscheck> block ends
-    local end_line=$(grep -n -m 1 "</syscheck>" "$ossecConfPath" | cut -d: -f1)
-    local tail_start=$((end_line + 1))
-
-    # Write the part of the file before the block to a temp file
-    head -n "$head_count" "$ossecConfPath" > "$tmpConfPath"
-    
-    # Append our new custom block
-    echo "$SYSCHECK_CONFIG" >> "$tmpConfPath"
-    
-    # Append the part of the file after the block
-    tail -n +"$tail_start" "$ossecConfPath" >> "$tmpConfPath"
-
-    # Replace the original with our newly constructed file
-    mv "$tmpConfPath" "$ossecConfPath"
-    # --- END FIX ---
+    # Use the robust append method instead of trying to replace text
+    append_config_block "$SYSCHECK_CONFIG"
 
     echo "Custom FIM configuration applied successfully."
 }
@@ -200,8 +204,6 @@ install_filevault_monitoring() {
     echo "--- Installing and scheduling FileVault encryption monitoring ---"
     local scriptPath="/Library/Ossec/bin/filevault_check.sh"
     local plistPath="/Library/LaunchDaemons/com.nixguard.filevaultcheck.plist"
-    local ossecConfPath="/Library/Ossec/etc/ossec.conf"
-    local tmpConfPath="/tmp/ossec.conf.fv.tmp"
 
     curl -Lo "$scriptPath" "$FILEVAULT_SCRIPT_URL"
     chmod 750 "$scriptPath"
@@ -231,29 +233,15 @@ EOM
     
     echo "Configuring agent to monitor FileVault status log..."
     read -r -d '' FILEVAULT_LOG_CONFIG <<'EOM'
+<!-- NixGuard FileVault Monitoring -->
 <localfile>
   <location>/Library/Ossec/logs/filevault_status.log</location>
   <log_format>json</log_format>
 </localfile>
 EOM
     
-    # --- FINAL FIX: Use robust file rebuilding to insert the new block ---
-    # Get the line number of the closing tag
-    local closing_tag_line=$(grep -n -m 1 "</ossec_config>" "$ossecConfPath" | cut -d: -f1)
-    local head_count=$((closing_tag_line - 1))
-
-    # Write the file content up to the closing tag
-    head -n "$head_count" "$ossecConfPath" > "$tmpConfPath"
-    
-    # Append our new block
-    echo "$FILEVAULT_LOG_CONFIG" >> "$tmpConfPath"
-    
-    # Append the closing tag
-    echo "</ossec_config>" >> "$tmpConfPath"
-
-    # Replace the original file
-    mv "$tmpConfPath" "$ossecConfPath"
-    # --- END FIX ---
+    # Use the robust append method
+    append_config_block "$FILEVAULT_LOG_CONFIG"
 
     echo "FileVault monitoring script installed and scheduled."
 }
