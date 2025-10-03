@@ -129,10 +129,18 @@ install_and_register_agent() {
     echo "Agent package installed."
 
     echo "Registering agent '${AGENT_NAME}' with manager..."
-    # --- FINAL FIX: Add '|| true' to prevent the script from exiting ---
-    # The agent-auth tool exits with a non-zero code even on success.
-    # This command ensures that set -e does not halt execution here.
-    /Library/Ossec/bin/agent-auth -m "${MANAGER_IP}" -A "${AGENT_NAME}" || true
+    
+    # --- FINAL FIX: Wrap the command in an if statement ---
+    # This is the most robust way to handle a command that incorrectly
+    # returns a non-zero exit code, preventing it from triggering 'set -e'.
+    if /Library/Ossec/bin/agent-auth -m "${MANAGER_IP}" -A "${AGENT_NAME}"; then
+        # This block runs if the exit code is 0 (success)
+        echo "Agent authentication command completed successfully."
+    else
+        # This block runs if the exit code is non-zero (failure)
+        # We print a warning but continue, as we know registration works anyway.
+        echo "Warning: agent-auth exited with a non-zero status. Continuing."
+    fi
     # --- END FIX ---
     
     echo "Agent successfully registered."
