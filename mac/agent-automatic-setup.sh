@@ -43,7 +43,6 @@ WAZUH_PKG_URL_ARM="https://packages.wazuh.com/4.x/macos/wazuh-agent-4.7.4-1.arm6
 AR_SCRIPT_URL="${REPO_BASE_URL}/remove-threat.sh"
 FILEVAULT_SCRIPT_URL="${REPO_BASE_URL}/scripts/filevault_check.sh"
 GET_USER_API_URL="https://api.thenex.world/get-user"
-# --- FINAL FIX: URLs for external configuration files ---
 FIM_CONF_URL="${REPO_BASE_URL}/config/fim.conf"
 FILEVAULT_CONF_URL="${REPO_BASE_URL}/config/filevault.conf"
 
@@ -68,9 +67,22 @@ fetch_user_preferences() {
     echo "--- Fetching user compliance preferences ---"
     local user_api_key="$1"
     local api_payload=$(printf '{"apiKey":"%s"}' "$user_api_key")
-    local response=$(curl --request POST --header "Content-Type: application/json" --silent --show-error --data "$api_payload" "$GET_USER_API_URL")
-    local jwt_payload=$(echo "$response" | jq -r '.token | split(".")[1] | @base64d | fromjson')
-    local standards=$(echo "$jwt_payload" | jq -r '.cybersecurityPreferences.complianceStandards')
+    # --- FINAL FIX: Make API call more robust ---
+    local response
+    response=$(curl --request POST --header "Content-Type: application/json" --silent --show-error --data "$api_payload" "$GET_USER_API_URL")
+
+    # Check for a valid response before trying to parse it.
+    if [ -z "$response" ] || ! echo "$response" | jq -e '.token' > /dev/null 2>&1; then
+        echo "Warning: Could not retrieve a valid token from the user API. Proceeding with default settings." >&2
+        echo "[]" # Return an empty JSON array to prevent jq errors
+        return
+    fi
+    # --- END FIX ---
+    
+    local jwt_payload
+    jwt_payload=$(echo "$response" | jq -r '.token | split(".")[1] | @base64d | fromjson')
+    local standards
+    standards=$(echo "$jwt_payload" | jq -r '.cybersecurityPreferences.complianceStandards')
     echo "$standards"
 }
 
@@ -103,7 +115,8 @@ install_and_register_agent() {
     else echo "Error: Unsupported architecture: $ARCH" >&2; exit 1; fi
     curl -Lo "/tmp/wazuh-agent.pkg" "$WAZUH_PKG_URL"
     
-    WAZUH_MANAGER="${MANAGER_IP}" WAZUH_AGENT_NAME="${AGENT_NAME}" WAZUH_GROUP="${GROUP_LABEL}" \
+    # Note: We no longer pass WAZUH_MANAGER here as it's unreliable.
+    WAZUH_AGENT_NAME="${AGENT_NAME}" WAZUH_GROUP="${GROUP_LABEL}" \
     installer -pkg "/tmp/wazuh-agent.pkg" -target /
     
     rm -f "/tmp/wazuh-agent.pkg"
@@ -139,7 +152,6 @@ configure_ossec_conf() {
     echo "Configuration file found and is not empty."
 
     echo "Applying File Integrity Monitoring (FIM) rules by downloading config..."
-    # --- FINAL FIX: Download the config and append it. This is the most robust method. ---
     curl -sS "$FIM_CONF_URL" >> "$ossecConfPath"
     
     echo "Custom FIM configuration applied successfully."
@@ -168,7 +180,6 @@ install_filevault_monitoring() {
     chmod 750 "$scriptPath"
     chown root:wazuh "$scriptPath"
 
-    # The LAUNCHD_PLIST is simple enough that direct assignment is safe.
     LAUNCHD_PLIST="<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
 <plist version=\"1.0\">
@@ -190,11 +201,22 @@ install_filevault_monitoring() {
     launchctl load "$plistPath"
     
     echo "Configuring agent to monitor FileVault status log by downloading config..."
-    # --- FINAL FIX: Download the config and append it. ---
     curl -sS "$FILEVAULT_CONF_URL" >> "$ossecConfPath"
 
     echo "FileVault monitoring script installed and scheduled."
 }
+
+# --- FINAL FIX: New function to manually set the manager IP ---
+configure_manager_ip() {
+    echo "--- Manually configuring manager IP to ensure correctness ---"
+    local ossecConfPath="/Library/Ossec/etc/ossec.conf"
+    # Use sed to replace the placeholder with the actual manager IP.
+    # This is a fallback for when the installer fails to use the env var.
+    # The '' after -i is required for macOS compatibility.
+    sed -i '' "s|<address>MANAGER_IP</address>|<address>${MANAGER_IP}</address>|g" "$ossecConfPath"
+    echo "Manager IP configured in ossec.conf."
+}
+# --- END FIX ---
 
 
 # --- Main Execution ---
@@ -221,7 +243,6 @@ install_ar_script
 
 # --- Intelligent Feature Deployment ---
 ENCRYPTION_REQUIRED=false
-# Default to true if dependency check fails
 if ! check_dependencies; then
     ENCRYPTION_REQUIRED=true
 else
@@ -229,7 +250,7 @@ else
     REQUIRED_STANDARDS=("soc2" "nist_sp_800_53" "iso27001" "gdpr" "hipaa" "pci_dss" "pipeda" "cis_controls")
     
     for standard in "${REQUIRED_STANDARDS[@]}"; do
-        if echo "$COMPLIANCE_STANDARDS" | jq -e --arg s "$standard" '.[] | contains($s)' > /dev/null; then
+        if echo "$COMPLIANCE_STANDARDS" | jq -e '.[] | contains($s)' --arg s "$standard" > /dev/null 2>&1; then
             echo "Compliance standard '$standard' found, enabling encryption monitoring."
             ENCRYPTION_REQUIRED=true
             break
@@ -239,9 +260,10 @@ fi
 
 if [ "$ENCRYPTION_REQUIRED" = true ]; then
     install_filevault_monitoring
-else
-    echo "User's compliance standards do not require encryption monitoring. Skipping."
 fi
+
+# --- FINAL FIX: Call the new function before restarting the agent ---
+configure_manager_ip
 
 echo "--- Restarting Wazuh Agent to apply all changes ---"
 /Library/Ossec/bin/wazuh-control restart
