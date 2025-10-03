@@ -27,13 +27,21 @@ AGENT_NAME_BASE=$2 # Store the base name
 API_KEY=$3
 GROUP_LABEL="default"
 
-# --- Create a unique agent name for CI/CD environments ---
+# --- Create a unique agent name for CI/CD or re-run environments ---
+# A unique suffix is always added to prevent registration failures on re-runs.
 if [ -n "$GITHUB_RUN_ID" ]; then
-  AGENT_NAME="${AGENT_NAME_BASE}-${GITHUB_RUN_ID}"
-  echo "GitHub Actions environment detected. Using unique agent name: ${AGENT_NAME}"
+  # In GitHub Actions, use the run ID for a predictable unique name.
+  UNIQUE_SUFFIX="${GITHUB_RUN_ID}"
+  echo "GitHub Actions environment detected. Using run ID for unique agent name."
 else
-  AGENT_NAME="${AGENT_NAME_BASE}"
+  # Outside of CI, use a timestamp to ensure uniqueness on every run.
+  UNIQUE_SUFFIX=$(date +%s)
+  echo "Using timestamp for unique agent name to prevent collisions."
 fi
+
+# Append the unique suffix to the base name provided by the user.
+AGENT_NAME="${AGENT_NAME_BASE}-${UNIQUE_SUFFIX}"
+echo "Final agent name will be: ${AGENT_NAME}"
 
 # URLs for Wazuh packages and NixGuard scripts
 WAZUH_PKG_URL_INTEL="https://packages.wazuh.com/4.x/macos/wazuh-agent-4.7.4-1.intel64.pkg"
@@ -120,11 +128,8 @@ install_and_register_agent() {
     rm -f "/tmp/wazuh-agent.pkg"
     echo "Agent package installed."
 
-    # --- THE FIX: Add the -f flag to force re-registration on the manager ---
-    # This solves the "Duplicate agent name" error on subsequent runs.
-    echo "Registering agent '${AGENT_NAME}' with manager (forcing if pre-existing)..."
-    /Library/Ossec/bin/agent-auth -m "${MANAGER_IP}" -A "${AGENT_NAME}" -f
-    # --- END FIX ---
+    echo "Registering agent '${AGENT_NAME}' with manager..."
+    /Library/Ossec/bin/agent-auth -m "${MANAGER_IP}" -A "${AGENT_NAME}"
     
     echo "Agent successfully registered."
 }
