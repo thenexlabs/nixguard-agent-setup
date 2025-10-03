@@ -161,7 +161,16 @@ configure_ossec_conf() {
   <ignore>/Users/*/Videos</ignore>
 </syscheck>
 EOM
-    awk -v new_config="$SYSCHECK_CONFIG" 'BEGIN {p=1} /<syscheck>/ {if(!x){print new_config; x=1}; p=0} /<\/syscheck>/ {p=1; next} p' "$ossecConfPath" > "$ossecConfPath.tmp" && mv "$ossecConfPath.tmp" "$ossecConfPath"
+    # Export the multiline string to the environment to be safely read by awk.
+    # This avoids shell expansion issues with the -v flag.
+    export SYSCHECK_CONFIG
+    awk '
+        BEGIN { p=1; new_config=ENVIRON["SYSCHECK_CONFIG"] }
+        /<syscheck>/ { if(!x) { print new_config; x=1 }; p=0 }
+        /<\/syscheck>/ { p=1; next }
+        p
+    ' "$ossecConfPath" > "$ossecConfPath.tmp" && mv "$ossecConfPath.tmp" "$ossecConfPath"
+    unset SYSCHECK_CONFIG # Clean up environment
 
     echo "Custom FIM configuration applied successfully."
 }
