@@ -91,12 +91,11 @@ uninstall_wazuh_agent() {
 install_and_register_agent() {
     echo "--- Installing and Registering Wazuh Agent ---"
     ARCH=$(uname -m)
-    if [ "$ARCH" == "x88_64" ]; then WAZUH_PKG_URL=$WAZUH_PKG_URL_INTEL;
+    if [ "$ARCH" == "x86_64" ]; then WAZUH_PKG_URL=$WAZUH_PKG_URL_INTEL;
     elif [ "$ARCH" == "arm64" ]; then WAZUH_PKG_URL=$WAZUH_PKG_URL_ARM;
     else echo "Error: Unsupported architecture: $ARCH"; exit 1; fi
     curl -Lo "/tmp/wazuh-agent.pkg" "$WAZUH_PKG_URL"
     
-    # This step correctly sets the manager IP in the config file.
     WAZUH_MANAGER="${MANAGER_IP}" \
     WAZUH_AGENT_NAME="${AGENT_NAME}" \
     WAZUH_GROUP="${GROUP_LABEL}" \
@@ -105,12 +104,8 @@ install_and_register_agent() {
     rm -f "/tmp/wazuh-agent.pkg"
     echo "Agent package installed."
 
-    # --- THE FIX ---
-    # The -A flag requires the AGENT_NAME, not the API_KEY.
-    # This command now correctly requests enrollment for the specified agent name.
     echo "Registering agent '${AGENT_NAME}' with manager..."
     /Library/Ossec/bin/agent-auth -m "${MANAGER_IP}" -A "${AGENT_NAME}"
-    # --- END FIX ---
     
     echo "Agent successfully registered."
 }
@@ -121,6 +116,13 @@ configure_ossec_conf() {
     local ossecConfPath="/Library/Ossec/etc/ossec.conf"
     
     echo "Applying File Integrity Monitoring (FIM) rules..."
+
+    # --- THE FIX: A more robust, two-step method ---
+    # 1. Unconditionally delete any existing syscheck block to ensure a clean slate.
+    # The `sed -i ''` syntax is required for macOS.
+    sed -i '' '/<syscheck>/,/<\/syscheck>/d' "$ossecConfPath"
+
+    # 2. Define the new, correct syscheck block.
     read -r -d '' SYSCHECK_CONFIG <<'EOM'
 <syscheck>
   <directories check_all="yes" realtime="yes">/Applications</directories>
@@ -141,7 +143,10 @@ configure_ossec_conf() {
   <ignore>/Users/*/Videos</ignore>
 </syscheck>
 EOM
-    awk -v new_config="$SYSCHECK_CONFIG" 'BEGIN {p=1} /<syscheck>/ {if(!x){print new_config; x=1}; p=0} /<\/syscheck>/ {p=1; next} p' "$ossecConfPath" > "$ossecConfPath.tmp" && mv "$ossecConfPath.tmp" "$ossecConfPath"
+
+    # 3. Insert the new block in a known-safe location (before the end of the config).
+    awk -v new_config="$SYSCHECK_CONFIG" '/<\/ossec_config>/ {print new_config} 1' "$ossecConfPath" > "$ossecConfPath.tmp" && mv "$ossecConfPath.tmp" "$ossecConfPath"
+    # --- END FIX ---
 
     echo "Custom FIM configuration applied successfully."
 }
