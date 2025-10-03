@@ -23,7 +23,7 @@ AGENT_NAME_BASE=$2 # Store the base name
 API_KEY=$3
 GROUP_LABEL="default"
 
-# --- THE FIX: Create a unique agent name for CI/CD environments ---
+# --- Create a unique agent name for CI/CD environments ---
 # Check if the GITHUB_RUN_ID environment variable exists.
 if [ -n "$GITHUB_RUN_ID" ]; then
   # If it exists, append it to the agent name to ensure uniqueness.
@@ -33,7 +33,6 @@ else
   # Otherwise, use the name as provided.
   AGENT_NAME="${AGENT_NAME_BASE}"
 fi
-# --- END FIX ---
 
 # URLs for Wazuh packages and NixGuard scripts
 WAZUH_PKG_URL_INTEL="https://packages.wazuh.com/4.x/macos/wazuh-agent-4.7.4-1.intel64.pkg"
