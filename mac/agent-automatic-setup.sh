@@ -141,16 +141,19 @@ configure_ossec_conf() {
     
     local timeout=30
     local counter=0
-    echo "Waiting for configuration file to be created..."
-    while [ ! -f "$ossecConfPath" ]; do
+    # --- FIX START: Wait for a NON-EMPTY configuration file ---
+    # This prevents a race condition where the file exists but is not yet populated.
+    echo "Waiting for configuration file to be created and populated..."
+    while [ ! -s "$ossecConfPath" ]; do
         if [ $counter -ge $timeout ]; then
-            echo "Error: Timed out waiting for '$ossecConfPath' to be created." >&2
+            echo "Error: Timed out waiting for '$ossecConfPath' to be created and populated." >&2
             exit 1
         fi
         sleep 1
         counter=$((counter+1))
     done
-    echo "Configuration file found."
+    echo "Configuration file found and is not empty."
+    # --- FIX END ---
 
     echo "Applying File Integrity Monitoring (FIM) rules..."
     read -r -d '' SYSCHECK_CONFIG <<'EOM'
@@ -173,11 +176,20 @@ configure_ossec_conf() {
   <ignore>/Users/*/Videos</ignore>
 </syscheck>
 EOM
-    # --- FIX: Use perl for robust multi-line replacement ---
+    # --- FIX START: Use a robust temp-file-and-move method for editing ---
+    # This is safer and more portable than in-place editing (-i).
     export SYSCHECK_CONFIG
-    perl -i -p0e 's|<syscheck>.*?</syscheck>|$ENV{SYSCHECK_CONFIG}|s' "$ossecConfPath"
+    perl -p0e 's|<syscheck>.*?</syscheck>|$ENV{SYSCHECK_CONFIG}|s' "$ossecConfPath" > "$ossecConfPath.tmp"
+    
+    # Check if the temp file was created successfully before moving
+    if [ -f "$ossecConfPath.tmp" ]; then
+        mv "$ossecConfPath.tmp" "$ossecConfPath"
+    else
+        echo "Error: Failed to create temporary configuration file." >&2
+        exit 1
+    fi
     unset SYSCHECK_CONFIG
-    # --- END FIX ---
+    # --- FIX END ---
 
     echo "Custom FIM configuration applied successfully."
 }
