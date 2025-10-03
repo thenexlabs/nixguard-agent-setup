@@ -206,7 +206,6 @@ install_filevault_monitoring() {
     echo "FileVault monitoring script installed and scheduled."
 }
 
-# --- FINAL FIX: New function to manually set the manager IP ---
 configure_manager_ip() {
     echo "--- Manually configuring manager IP to ensure correctness ---"
     local ossecConfPath="/Library/Ossec/etc/ossec.conf"
@@ -216,8 +215,6 @@ configure_manager_ip() {
     sed -i '' "s|<address>MANAGER_IP</address>|<address>${MANAGER_IP}</address>|g" "$ossecConfPath"
     echo "Manager IP configured in ossec.conf."
 }
-# --- END FIX ---
-
 
 # --- Main Execution ---
 cleanup_on_failure() {
@@ -242,15 +239,23 @@ configure_ossec_conf
 install_ar_script
 
 # --- Intelligent Feature Deployment ---
+# This entire block was missing from the execution flow.
+
+# 1. Start with the assumption that encryption is NOT required.
 ENCRYPTION_REQUIRED=false
+
+# 2. Check for reasons to enable it.
 if ! check_dependencies; then
+    # Reason 1: Dependencies are missing. Fail-safe to secure mode.
     ENCRYPTION_REQUIRED=true
 else
+    # Dependencies are present, so we can check the user's preferences.
     COMPLIANCE_STANDARDS=$(fetch_user_preferences "$API_KEY")
     REQUIRED_STANDARDS=("soc2" "nist_sp_800_53" "iso27001" "gdpr" "hipaa" "pci_dss" "pipeda" "cis_controls")
     
     for standard in "${REQUIRED_STANDARDS[@]}"; do
         if echo "$COMPLIANCE_STANDARDS" | jq -e '.[] | contains($s)' --arg s "$standard" > /dev/null 2>&1; then
+            # Reason 2: A compliance standard requires it.
             echo "Compliance standard '$standard' found, enabling encryption monitoring."
             ENCRYPTION_REQUIRED=true
             break
@@ -258,11 +263,15 @@ else
     done
 fi
 
+# 3. Make the final decision based on the outcome.
 if [ "$ENCRYPTION_REQUIRED" = true ]; then
     install_filevault_monitoring
+else
+    echo "User's compliance standards do not require encryption monitoring. Skipping."
 fi
 
-# --- FINAL FIX: Call the new function before restarting the agent ---
+# --- End of Intelligent Feature Deployment block ---
+
 configure_manager_ip
 
 echo "--- Restarting Wazuh Agent to apply all changes ---"
