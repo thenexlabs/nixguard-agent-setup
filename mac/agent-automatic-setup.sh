@@ -8,8 +8,12 @@
 # curl -sS https://.../agent-automatic-setup.sh | sudo bash -s -- <MANAGER_IP> <AGENT_NAME> <API_KEY>
 #
 
+# --- FIX: Use set -E to ensure ERR traps are inherited in subshells ---
 # Exit immediately if any command fails for robust error handling.
 set -e
+# Ensure the ERR trap is inherited by functions, command substitutions, and subshells.
+set -E
+# --- END FIX ---
 
 # --- 1. Validate Input & Define Variables ---
 if [ "$#" -ne 3 ]; then
@@ -24,13 +28,10 @@ API_KEY=$3
 GROUP_LABEL="default"
 
 # --- Create a unique agent name for CI/CD environments ---
-# Check if the GITHUB_RUN_ID environment variable exists.
 if [ -n "$GITHUB_RUN_ID" ]; then
-  # If it exists, append it to the agent name to ensure uniqueness.
   AGENT_NAME="${AGENT_NAME_BASE}-${GITHUB_RUN_ID}"
   echo "GitHub Actions environment detected. Using unique agent name: ${AGENT_NAME}"
 else
-  # Otherwise, use the name as provided.
   AGENT_NAME="${AGENT_NAME_BASE}"
 fi
 
@@ -85,20 +86,14 @@ fetch_user_preferences() {
 # --- 4. Uninstall Existing Agent (for Idempotency) ---
 uninstall_wazuh_agent() {
     echo "--- Checking for existing Wazuh Agent installation ---"
-    # First, try to gracefully stop any running agent services.
     if [ -f "/Library/Ossec/bin/wazuh-control" ]; then
         echo "Stopping any running Wazuh agent services..."
         /Library/Ossec/bin/wazuh-control stop >/dev/null 2>&1 || true
     fi
-
-    # Attempt to run the official uninstaller if it exists.
     if [ -f "/Library/Ossec/bin/wazuh-uninstall.sh" ]; then
         echo "Found existing agent. Running official uninstaller..."
         /Library/Ossec/bin/wazuh-uninstall.sh >/dev/null 2>&1 || true
     fi
-    
-    # Finally, forcibly remove the directory to ensure a completely clean state.
-    # This is critical for idempotency and successful re-registration.
     if [ -d "/Library/Ossec" ]; then
         echo "Forcibly removing Wazuh agent directory for a clean installation..."
         rm -rf /Library/Ossec
@@ -125,10 +120,8 @@ install_and_register_agent() {
     rm -f "/tmp/wazuh-agent.pkg"
     echo "Agent package installed."
 
-    # --- THE FIX: Removed the unsupported `-f` flag ---
     echo "Registering agent '${AGENT_NAME}' with manager..."
     /Library/Ossec/bin/agent-auth -m "${MANAGER_IP}" -A "${AGENT_NAME}"
-    # --- END FIX ---
     
     echo "Agent successfully registered."
 }
@@ -172,7 +165,7 @@ configure_ossec_conf() {
   <ignore>/Users/*/Videos</ignore>
 </syscheck>
 EOM
-    # --- FINAL FIX: Use perl for robust multi-line replacement ---
+    # --- FIX: Use perl for robust multi-line replacement ---
     export SYSCHECK_CONFIG
     perl -i -p0e 's|<syscheck>.*?</syscheck>|$ENV{SYSCHECK_CONFIG}|s' "$ossecConfPath"
     unset SYSCHECK_CONFIG
@@ -233,7 +226,7 @@ EOM
   <log_format>json</log_format>
 </localfile>
 EOM
-    # --- FINAL FIX: Use perl to insert config before the final tag ---
+    # --- FIX: Use perl to insert config before the final tag ---
     export FILEVAULT_LOG_CONFIG
     perl -i -p0e 's|(</ossec_config>)|$ENV{FILEVAULT_LOG_CONFIG}\n$1|' "$ossecConfPath"
     unset FILEVAULT_LOG_CONFIG
@@ -242,12 +235,11 @@ EOM
     echo "FileVault monitoring script installed and scheduled."
 }
 
+
 # --- Main Execution ---
 cleanup_on_failure() {
     echo "❌ An error occurred during setup." >&2
     echo "--- Running automatic cleanup ---" >&2
-    # Forcefully uninstall the agent to clean the local state
-    # This ensures the next run can succeed with the same agent name
     if [ -f "/Library/Ossec/bin/wazuh-control" ]; then
         /Library/Ossec/bin/wazuh-control stop >/dev/null 2>&1
     fi
@@ -255,7 +247,6 @@ cleanup_on_failure() {
         rm -rf /Library/Ossec
     fi
     echo "Cleanup complete. The agent has been removed from this machine." >&2
-    # Note: This does not remove the agent from the manager, but allows re-registration.
 }
 
 # Trap any error signal (non-zero exit code) and run the cleanup function.
@@ -294,6 +285,7 @@ fi
 echo "--- Restarting Wazuh Agent to apply all changes ---"
 /Library/Ossec/bin/wazuh-control restart
 
+# Disable the error trap on success
 trap - ERR
 
 echo "✅ NixGuard agent setup complete and running."
