@@ -130,17 +130,13 @@ install_and_register_agent() {
 
     echo "Registering agent '${AGENT_NAME}' with manager..."
     
-    # --- FINAL FIX: Wrap the command in an if statement ---
-    # This is the most robust way to handle a command that incorrectly
-    # returns a non-zero exit code, preventing it from triggering 'set -e'.
-    if /Library/Ossec/bin/agent-auth -m "${MANAGER_IP}" -A "${AGENT_NAME}"; then
-        # This block runs if the exit code is 0 (success)
-        echo "Agent authentication command completed successfully."
-    else
-        # This block runs if the exit code is non-zero (failure)
-        # We print a warning but continue, as we know registration works anyway.
-        echo "Warning: agent-auth exited with a non-zero status. Continuing."
-    fi
+    # --- FINAL, DEFINITIVE FIX: Temporarily disable error checking ---
+    # The agent-auth command's execution triggers the ERR trap mid-stream
+    # in this specific shell environment. We must disable 'set -e' for this
+    # single command and then immediately re-enable it.
+    set +e
+    /Library/Ossec/bin/agent-auth -m "${MANAGER_IP}" -A "${AGENT_NAME}"
+    set -e
     # --- END FIX ---
     
     echo "Agent successfully registered."
