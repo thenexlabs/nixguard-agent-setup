@@ -8,14 +8,14 @@
 # curl -sS https://.../agent-automatic-setup.sh | sudo bash -s -- <MANAGER_IP> <AGENT_NAME> <API_KEY>
 #
 
-# Exit immediately if any command fails for robust error handling
+# Exit immediately if any command fails for robust error handling.
+# This is the key to preventing the script from continuing after an error.
 set -e
 
 # --- 1. Validate Input & Define Variables ---
 if [ "$#" -ne 3 ]; then
-    echo "Error: Invalid number of arguments."
-    echo "Usage: sudo bash -s -- <MANAGER_IP> <AGENT_NAME> <API_KEY>"
-    echo "Example: sudo bash -s -- 37.27.203.208 'Wazuh-Agent-Elias' 'f00c09fb...e833ed'"
+    echo "Error: Invalid number of arguments." >&2
+    echo "Usage: sudo bash -s -- <MANAGER_IP> <AGENT_NAME> <API_KEY>" >&2
     exit 1
 fi
 
@@ -38,7 +38,7 @@ check_dependencies() {
     if ! command -v jq &> /dev/null; then
         echo "jq is not installed. Attempting to install with Homebrew..."
         if ! command -v brew &> /dev/null; then
-            echo "Warning: Homebrew not found. Cannot install jq."
+            echo "Warning: Homebrew not found. Cannot install jq." >&2
             echo "FileVault monitoring will be enabled by default as a security fallback."
             return 1
         fi
@@ -93,7 +93,7 @@ install_and_register_agent() {
     ARCH=$(uname -m)
     if [ "$ARCH" == "x86_64" ]; then WAZUH_PKG_URL=$WAZUH_PKG_URL_INTEL;
     elif [ "$ARCH" == "arm64" ]; then WAZUH_PKG_URL=$WAZUH_PKG_URL_ARM;
-    else echo "Error: Unsupported architecture: $ARCH"; exit 1; fi
+    else echo "Error: Unsupported architecture: $ARCH" >&2; exit 1; fi
     curl -Lo "/tmp/wazuh-agent.pkg" "$WAZUH_PKG_URL"
     
     WAZUH_MANAGER="${MANAGER_IP}" \
@@ -104,8 +104,8 @@ install_and_register_agent() {
     rm -f "/tmp/wazuh-agent.pkg"
     echo "Agent package installed."
 
-    echo "Registering agent '${AGENT_NAME}' with manager..."
-    /Library/Ossec/bin/agent-auth -m "${MANAGER_IP}" -A "${AGENT_NAME}"
+    echo "Registering agent '${AGENT_NAME}' with manager (forcing if necessary)..."
+    /Library/Ossec/bin/agent-auth -m "${MANAGER_IP}" -A "${AGENT_NAME}" -f
     
     echo "Agent successfully registered."
 }
@@ -115,14 +115,22 @@ configure_ossec_conf() {
     echo "--- Applying custom NixGuard configuration ---"
     local ossecConfPath="/Library/Ossec/etc/ossec.conf"
     
+    # --- THE FIX: Wait for the config file to exist before modifying it ---
+    local timeout=30
+    local counter=0
+    echo "Waiting for configuration file to be created..."
+    while [ ! -f "$ossecConfPath" ]; do
+        if [ $counter -ge $timeout ]; then
+            echo "Error: Timed out waiting for '$ossecConfPath' to be created." >&2
+            exit 1
+        fi
+        sleep 1
+        counter=$((counter+1))
+    done
+    echo "Configuration file found."
+    # --- END FIX ---
+
     echo "Applying File Integrity Monitoring (FIM) rules..."
-
-    # --- THE FIX: A more robust, two-step method ---
-    # 1. Unconditionally delete any existing syscheck block to ensure a clean slate.
-    # The `sed -i ''` syntax is required for macOS.
-    sed -i '' '/<syscheck>/,/<\/syscheck>/d' "$ossecConfPath"
-
-    # 2. Define the new, correct syscheck block.
     read -r -d '' SYSCHECK_CONFIG <<'EOM'
 <syscheck>
   <directories check_all="yes" realtime="yes">/Applications</directories>
@@ -143,10 +151,8 @@ configure_ossec_conf() {
   <ignore>/Users/*/Videos</ignore>
 </syscheck>
 EOM
-
-    # 3. Insert the new block in a known-safe location (before the end of the config).
-    awk -v new_config="$SYSCHECK_CONFIG" '/<\/ossec_config>/ {print new_config} 1' "$ossecConfPath" > "$ossecConfPath.tmp" && mv "$ossecConfPath.tmp" "$ossecConfPath"
-    # --- END FIX ---
+    # Use a single, atomic awk command to replace the block. This is safer.
+    awk -v new_config="$SYSCHECK_CONFIG" 'BEGIN {p=1} /<syscheck>/ {if(!x){print new_config; x=1}; p=0} /<\/syscheck>/ {p=1; next} p' "$ossecConfPath" > "$ossecConfPath.tmp" && mv "$ossecConfPath.tmp" "$ossecConfPath"
 
     echo "Custom FIM configuration applied successfully."
 }
