@@ -117,25 +117,19 @@ install_and_register_agent() {
 configure_ossec_conf() {
     echo "--- Applying custom NixGuard configuration ---"
     local ossecConfPath="/Library/Ossec/etc/ossec.conf"
+    local tmpConfPath="/tmp/ossec.conf.tmp"
     local timeout=30
     local counter=0
     echo "Waiting for configuration file to be created and populated..."
 
-    # --- FINAL FIX: The 'while' loop's condition returns a non-zero exit code
-    # until the file exists, which incorrectly triggers the ERR trap.
-    # We must temporarily disable 'set -e' for the duration of the loop.
     set +e
     while [ ! -s "$ossecConfPath" ]; do
-        if [ $counter -ge $timeout ]; then
-            break
-        fi
+        if [ $counter -ge $timeout ]; then break; fi
         sleep 1
         counter=$((counter+1))
     done
-    set -e # Re-enable error checking immediately after the loop
-    # --- END FIX ---
+    set -e
 
-    # Now, explicitly check if the loop timed out and the file is still missing.
     if [ ! -s "$ossecConfPath" ]; then
         echo "Error: Timed out waiting for '$ossecConfPath' to be created and populated." >&2
         exit 1
@@ -163,10 +157,29 @@ configure_ossec_conf() {
   <ignore>/Users/*/Videos</ignore>
 </syscheck>
 EOM
-    export SYSCHECK_CONFIG
-    perl -p0e 's|<syscheck>.*?</syscheck>|$ENV{SYSCHECK_CONFIG}|s' "$ossecConfPath" > "$ossecConfPath.tmp"
-    mv "$ossecConfPath.tmp" "$ossecConfPath"
-    unset SYSCHECK_CONFIG
+    
+    # --- FINAL FIX: Rebuild the config file from scratch for maximum reliability ---
+    # Get the line number *before* the <syscheck> block starts
+    local start_line=$(grep -n -m 1 "<syscheck>" "$ossecConfPath" | cut -d: -f1)
+    local head_count=$((start_line - 1))
+    
+    # Get the line number *after* the </syscheck> block ends
+    local end_line=$(grep -n -m 1 "</syscheck>" "$ossecConfPath" | cut -d: -f1)
+    local tail_start=$((end_line + 1))
+
+    # Write the part of the file before the block to a temp file
+    head -n "$head_count" "$ossecConfPath" > "$tmpConfPath"
+    
+    # Append our new custom block
+    echo "$SYSCHECK_CONFIG" >> "$tmpConfPath"
+    
+    # Append the part of the file after the block
+    tail -n +"$tail_start" "$ossecConfPath" >> "$tmpConfPath"
+
+    # Replace the original with our newly constructed file
+    mv "$tmpConfPath" "$ossecConfPath"
+    # --- END FIX ---
+
     echo "Custom FIM configuration applied successfully."
 }
 
@@ -188,6 +201,7 @@ install_filevault_monitoring() {
     local scriptPath="/Library/Ossec/bin/filevault_check.sh"
     local plistPath="/Library/LaunchDaemons/com.nixguard.filevaultcheck.plist"
     local ossecConfPath="/Library/Ossec/etc/ossec.conf"
+    local tmpConfPath="/tmp/ossec.conf.fv.tmp"
 
     curl -Lo "$scriptPath" "$FILEVAULT_SCRIPT_URL"
     chmod 750 "$scriptPath"
@@ -222,10 +236,25 @@ EOM
   <log_format>json</log_format>
 </localfile>
 EOM
-    export FILEVAULT_LOG_CONFIG
-    perl -p0e 's|(</ossec_config>)|$ENV{FILEVAULT_LOG_CONFIG}\n$1|' "$ossecConfPath" > "$ossecConfPath.tmp"
-    mv "$ossecConfPath.tmp" "$ossecConfPath"
-    unset FILEVAULT_LOG_CONFIG
+    
+    # --- FINAL FIX: Use robust file rebuilding to insert the new block ---
+    # Get the line number of the closing tag
+    local closing_tag_line=$(grep -n -m 1 "</ossec_config>" "$ossecConfPath" | cut -d: -f1)
+    local head_count=$((closing_tag_line - 1))
+
+    # Write the file content up to the closing tag
+    head -n "$head_count" "$ossecConfPath" > "$tmpConfPath"
+    
+    # Append our new block
+    echo "$FILEVAULT_LOG_CONFIG" >> "$tmpConfPath"
+    
+    # Append the closing tag
+    echo "</ossec_config>" >> "$tmpConfPath"
+
+    # Replace the original file
+    mv "$tmpConfPath" "$ossecConfPath"
+    # --- END FIX ---
+
     echo "FileVault monitoring script installed and scheduled."
 }
 
