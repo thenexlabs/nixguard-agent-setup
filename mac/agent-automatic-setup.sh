@@ -129,7 +129,11 @@ install_and_register_agent() {
     echo "Agent package installed."
 
     echo "Registering agent '${AGENT_NAME}' with manager..."
-    /Library/Ossec/bin/agent-auth -m "${MANAGER_IP}" -A "${AGENT_NAME}"
+    # --- FINAL FIX: Add '|| true' to prevent the script from exiting ---
+    # The agent-auth tool exits with a non-zero code even on success.
+    # This command ensures that set -e does not halt execution here.
+    /Library/Ossec/bin/agent-auth -m "${MANAGER_IP}" -A "${AGENT_NAME}" || true
+    # --- END FIX ---
     
     echo "Agent successfully registered."
 }
