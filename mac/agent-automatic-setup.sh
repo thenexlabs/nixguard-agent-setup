@@ -110,10 +110,17 @@ install_and_register_agent() {
 
 # --- 6. Apply Custom FIM and Log Collection Configuration ---
 configure_ossec_conf() {
-    # ... (This function remains unchanged) ...
     echo "--- Applying custom NixGuard configuration ---"
     local ossecConfPath="/Library/Ossec/etc/ossec.conf"
+    
     echo "Applying File Integrity Monitoring (FIM) rules..."
+
+    # This is a more robust method. First, we delete the entire existing
+    # syscheck block, from the opening tag to the closing tag.
+    # The sed -i '' command is the correct syntax for macOS's version of sed.
+    sed -i '' '/<syscheck>/,/<\/syscheck>/d' "$ossecConfPath"
+
+    # Now, we define our new, correct syscheck block.
     read -r -d '' SYSCHECK_CONFIG <<'EOM'
 <syscheck>
   <directories check_all="yes" realtime="yes">/Applications</directories>
@@ -128,17 +135,18 @@ configure_ossec_conf() {
   <directories check_all="yes" realtime="yes" whodata="yes">/Users/%(user)/Documents</directories>
   <ignore>/private/var/log/wazuh</ignore>
   <ignore type="sregex">.log$|.swp$|.DS_Store$</ignore>
-  <ignore>/Users/*
-/Library</ignore>
-  <ignore>/Users/*
-/Pictures</ignore>
-  <ignore>/Users/*
-/Music</ignore>
-  <ignore>/Users/*
-/Videos</ignore>
+  <ignore>/Users/*/Library</ignore>
+  <ignore>/Users/*/Pictures</ignore>
+  <ignore>/Users/*/Music</ignore>
+  <ignore>/Users/*/Videos</ignore>
 </syscheck>
 EOM
-    awk -v new_config="$SYSCHECK_CONFIG" 'BEGIN {p=1} /<syscheck>/ {if(!x){print new_config; x=1}; p=0} /<\/syscheck>/ {p=1; next} p' "$ossecConfPath" > "$ossecConfPath.tmp" && mv "$ossecConfPath.tmp" "$ossecConfPath"
+
+    # Finally, we insert our new block just before the closing </ossec_config> tag.
+    # This awk command finds the line with </ossec_config>, prints our new config
+    # right before it, and then the '1' tells it to print the original line.
+    awk -v new_config="$SYSCHECK_CONFIG" '/<\/ossec_config>/ {print new_config} 1' "$ossecConfPath" > "$ossecConfPath.tmp" && mv "$ossecConfPath.tmp" "$ossecConfPath"
+
     echo "Custom FIM configuration applied successfully."
 }
 
