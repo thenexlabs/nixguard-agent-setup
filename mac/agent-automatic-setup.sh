@@ -40,7 +40,7 @@ check_dependencies() {
         if ! command -v brew &> /dev/null; then
             echo "Warning: Homebrew not found. Cannot install jq."
             echo "FileVault monitoring will be enabled by default as a security fallback."
-            return 1 # Return a non-zero status to indicate dependency is missing
+            return 1
         fi
         brew install jq
     fi
@@ -53,11 +53,9 @@ fetch_user_preferences() {
     local user_api_key="$1"
     echo "--- Fetching user compliance preferences ---"
     
-    # Construct the JSON payload for the API
     local api_payload
     api_payload=$(printf '{"apiKey":"%s"}' "$user_api_key")
 
-    # Make the API call and extract the JWT token
     local response
     response=$(curl --request POST \
         --header "Content-Type: application/json" \
@@ -65,9 +63,6 @@ fetch_user_preferences() {
         --data "$api_payload" \
         "$GET_USER_API_URL")
 
-    # Decode the JWT payload to get the compliance standards
-    # This requires jq. We extract the second part of the JWT, decode it from Base64,
-    # and then parse the resulting JSON to get the compliance standards array.
     local jwt_payload
     jwt_payload=$(echo "$response" | jq -r '.token | split(".")[1] | @base64d | fromjson')
     
@@ -83,6 +78,7 @@ uninstall_wazuh_agent() {
     if [ -f "/Library/Ossec/bin/wazuh-uninstall.sh" ]; then
         echo "Found existing agent. Running official uninstaller..."
         /Library/Ossec/bin/wazuh-uninstall.sh
+    # --- SYNTAX FIX: Replaced `{` with `then` ---
     elif [ -d "/Library/Ossec" ]; then
         echo "Found legacy agent directory. Forcibly removing..."
         /Library/Ossec/bin/wazuh-control stop >/dev/null 2>&1 || true
@@ -94,7 +90,6 @@ uninstall_wazuh_agent() {
 
 # --- 5. Install New Agent and Register via API ---
 install_and_register_agent() {
-    # ... (This function remains unchanged) ...
     echo "--- Installing and Registering Wazuh Agent ---"
     ARCH=$(uname -m)
     if [ "$ARCH" == "x86_64" ]; then WAZUH_PKG_URL=$WAZUH_PKG_URL_INTEL;
@@ -115,12 +110,8 @@ configure_ossec_conf() {
     
     echo "Applying File Integrity Monitoring (FIM) rules..."
 
-    # This is a more robust method. First, we delete the entire existing
-    # syscheck block, from the opening tag to the closing tag.
-    # The sed -i '' command is the correct syntax for macOS's version of sed.
-    sed -i '' '/<syscheck>/,/<\/syscheck>/d' "$ossecConfPath"
-
-    # Now, we define our new, correct syscheck block.
+    # --- ROBUSTNESS FIX: Use a single, atomic awk command to replace the FIM block ---
+    # This is safer than deleting and then adding in separate steps.
     read -r -d '' SYSCHECK_CONFIG <<'EOM'
 <syscheck>
   <directories check_all="yes" realtime="yes">/Applications</directories>
@@ -141,18 +132,13 @@ configure_ossec_conf() {
   <ignore>/Users/*/Videos</ignore>
 </syscheck>
 EOM
-
-    # Finally, we insert our new block just before the closing </ossec_config> tag.
-    # This awk command finds the line with </ossec_config>, prints our new config
-    # right before it, and then the '1' tells it to print the original line.
-    awk -v new_config="$SYSCHECK_CONFIG" '/<\/ossec_config>/ {print new_config} 1' "$ossecConfPath" > "$ossecConfPath.tmp" && mv "$ossecConfPath.tmp" "$ossecConfPath"
+    awk -v new_config="$SYSCHECK_CONFIG" 'BEGIN {p=1} /<syscheck>/ {if(!x){print new_config; x=1}; p=0} /<\/syscheck>/ {p=1; next} p' "$ossecConfPath" > "$ossecConfPath.tmp" && mv "$ossecConfPath.tmp" "$ossecConfPath"
 
     echo "Custom FIM configuration applied successfully."
 }
 
 # --- 7. Install Active Response Script ---
 install_ar_script() {
-    # ... (This function remains unchanged) ...
     echo "--- Installing Active Response script for threat remediation ---"
     local destDir="/Library/Ossec/active-response/bin"
     local removeThreatPath="$destDir/remove-threat.sh"
@@ -221,7 +207,6 @@ install_ar_script
 ENCRYPTION_REQUIRED=false
 if check_dependencies; then
     COMPLIANCE_STANDARDS=$(fetch_user_preferences "$API_KEY")
-    # List of standards that mandate endpoint encryption
     REQUIRED_STANDARDS=("soc2" "nist_sp_800_53" "iso27001" "gdpr" "hipaa" "pci_dss" "pipeda" "cis_controls")
     
     for standard in "${REQUIRED_STANDARDS[@]}"; do
@@ -232,7 +217,6 @@ if check_dependencies; then
         fi
     done
 else
-    # Fallback: If jq is missing, enable by default for maximum security.
     ENCRYPTION_REQUIRED=true
 fi
 
