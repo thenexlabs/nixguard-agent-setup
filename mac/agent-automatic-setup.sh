@@ -9,7 +9,6 @@
 #
 
 # Exit immediately if any command fails for robust error handling.
-# This is the key to preventing the script from continuing after an error.
 set -e
 
 # --- 1. Validate Input & Define Variables ---
@@ -20,9 +19,21 @@ if [ "$#" -ne 3 ]; then
 fi
 
 MANAGER_IP=$1
-AGENT_NAME=$2
+AGENT_NAME_BASE=$2 # Store the base name
 API_KEY=$3
 GROUP_LABEL="default"
+
+# --- THE FIX: Create a unique agent name for CI/CD environments ---
+# Check if the GITHUB_RUN_ID environment variable exists.
+if [ -n "$GITHUB_RUN_ID" ]; then
+  # If it exists, append it to the agent name to ensure uniqueness.
+  AGENT_NAME="${AGENT_NAME_BASE}-${GITHUB_RUN_ID}"
+  echo "GitHub Actions environment detected. Using unique agent name: ${AGENT_NAME}"
+else
+  # Otherwise, use the name as provided.
+  AGENT_NAME="${AGENT_NAME_BASE}"
+fi
+# --- END FIX ---
 
 # URLs for Wazuh packages and NixGuard scripts
 WAZUH_PKG_URL_INTEL="https://packages.wazuh.com/4.x/macos/wazuh-agent-4.7.4-1.intel64.pkg"
@@ -104,8 +115,10 @@ install_and_register_agent() {
     rm -f "/tmp/wazuh-agent.pkg"
     echo "Agent package installed."
 
-    echo "Registering agent '${AGENT_NAME}' with manager (forcing if necessary)..."
-    /Library/Ossec/bin/agent-auth -m "${MANAGER_IP}" -A "${AGENT_NAME}" -f
+    # --- THE FIX: Removed the unsupported `-f` flag ---
+    echo "Registering agent '${AGENT_NAME}' with manager..."
+    /Library/Ossec/bin/agent-auth -m "${MANAGER_IP}" -A "${AGENT_NAME}"
+    # --- END FIX ---
     
     echo "Agent successfully registered."
 }
@@ -115,7 +128,6 @@ configure_ossec_conf() {
     echo "--- Applying custom NixGuard configuration ---"
     local ossecConfPath="/Library/Ossec/etc/ossec.conf"
     
-    # --- THE FIX: Wait for the config file to exist before modifying it ---
     local timeout=30
     local counter=0
     echo "Waiting for configuration file to be created..."
@@ -128,7 +140,6 @@ configure_ossec_conf() {
         counter=$((counter+1))
     done
     echo "Configuration file found."
-    # --- END FIX ---
 
     echo "Applying File Integrity Monitoring (FIM) rules..."
     read -r -d '' SYSCHECK_CONFIG <<'EOM'
@@ -151,7 +162,6 @@ configure_ossec_conf() {
   <ignore>/Users/*/Videos</ignore>
 </syscheck>
 EOM
-    # Use a single, atomic awk command to replace the block. This is safer.
     awk -v new_config="$SYSCHECK_CONFIG" 'BEGIN {p=1} /<syscheck>/ {if(!x){print new_config; x=1}; p=0} /<\/syscheck>/ {p=1; next} p' "$ossecConfPath" > "$ossecConfPath.tmp" && mv "$ossecConfPath.tmp" "$ossecConfPath"
 
     echo "Custom FIM configuration applied successfully."
