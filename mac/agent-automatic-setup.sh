@@ -242,7 +242,7 @@ install_ar_script
 # This entire block was missing from the execution flow.
 
 # 1. Start with the assumption that encryption is NOT required.
-ENCRYPTION_REQUIRED=false
+ENCRYPTION_REQUIRED=true
 
 # 2. Check for reasons to enable it.
 if ! check_dependencies; then
