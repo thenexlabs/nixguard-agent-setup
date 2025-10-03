@@ -149,8 +149,6 @@ configure_ossec_conf() {
     
     local timeout=30
     local counter=0
-    # --- FIX START: Wait for a NON-EMPTY configuration file ---
-    # This prevents a race condition where the file exists but is not yet populated.
     echo "Waiting for configuration file to be created and populated..."
     while [ ! -s "$ossecConfPath" ]; do
         if [ $counter -ge $timeout ]; then
@@ -161,7 +159,6 @@ configure_ossec_conf() {
         counter=$((counter+1))
     done
     echo "Configuration file found and is not empty."
-    # --- FIX END ---
 
     echo "Applying File Integrity Monitoring (FIM) rules..."
     read -r -d '' SYSCHECK_CONFIG <<'EOM'
@@ -184,20 +181,22 @@ configure_ossec_conf() {
   <ignore>/Users/*/Videos</ignore>
 </syscheck>
 EOM
-    # --- FIX START: Use a robust temp-file-and-move method for editing ---
-    # This is safer and more portable than in-place editing (-i).
+    # --- FINAL FIX: Robustly handle the perl command's exit code ---
     export SYSCHECK_CONFIG
+    set +e # Temporarily disable exit on error
     perl -p0e 's|<syscheck>.*?</syscheck>|$ENV{SYSCHECK_CONFIG}|s' "$ossecConfPath" > "$ossecConfPath.tmp"
-    
-    # Check if the temp file was created successfully before moving
-    if [ -f "$ossecConfPath.tmp" ]; then
-        mv "$ossecConfPath.tmp" "$ossecConfPath"
-    else
-        echo "Error: Failed to create temporary configuration file." >&2
+    PERL_EXIT_CODE=$? # Capture the exit code
+    set -e # Re-enable exit on error
+
+    # Explicitly check if the command succeeded and created a valid file
+    if [ $PERL_EXIT_CODE -ne 0 ] || [ ! -s "$ossecConfPath.tmp" ]; then
+        echo "Error: Perl command failed to create a valid temporary FIM configuration file. Exit code: $PERL_EXIT_CODE" >&2
         exit 1
     fi
+    
+    mv "$ossecConfPath.tmp" "$ossecConfPath"
     unset SYSCHECK_CONFIG
-    # --- FIX END ---
+    # --- END FIX ---
 
     echo "Custom FIM configuration applied successfully."
 }
@@ -254,9 +253,20 @@ EOM
   <log_format>json</log_format>
 </localfile>
 EOM
-    # --- FIX: Use perl to insert config before the final tag ---
+    # --- FINAL FIX: Robustly handle the perl command's exit code ---
     export FILEVAULT_LOG_CONFIG
-    perl -i -p0e 's|(</ossec_config>)|$ENV{FILEVAULT_LOG_CONFIG}\n$1|' "$ossecConfPath"
+    set +e # Temporarily disable exit on error
+    perl -p0e 's|(</ossec_config>)|$ENV{FILEVAULT_LOG_CONFIG}\n$1|' "$ossecConfPath" > "$ossecConfPath.tmp"
+    PERL_EXIT_CODE=$? # Capture the exit code
+    set -e # Re-enable exit on error
+
+    # Explicitly check if the command succeeded and created a valid file
+    if [ $PERL_EXIT_CODE -ne 0 ] || [ ! -s "$ossecConfPath.tmp" ]; then
+        echo "Error: Perl command failed to create a valid temporary FileVault configuration file. Exit code: $PERL_EXIT_CODE" >&2
+        exit 1
+    fi
+
+    mv "$ossecConfPath.tmp" "$ossecConfPath"
     unset FILEVAULT_LOG_CONFIG
     # --- END FIX ---
 
