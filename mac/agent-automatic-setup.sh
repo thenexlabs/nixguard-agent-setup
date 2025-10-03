@@ -8,14 +8,13 @@
 # curl -sS https://.../agent-automatic-setup.sh | sudo bash -s -- <MANAGER_IP> <AGENT_NAME> <API_KEY>
 #
 
-# --- FINAL FIX: Enable xtrace for verbose debugging ---
+# --- Enable Verbose Debugging ---
 # Exit immediately if any command fails for robust error handling.
 set -e
 # Ensure the ERR trap is inherited by functions, command substitutions, and subshells.
 set -E
-# Print each command to stderr before executing it.
+# Print each command to stderr before executing it for full visibility.
 set -x
-# --- END FIX ---
 
 # --- 1. Validate Input & Define Variables ---
 if [ "$#" -ne 3 ]; then
@@ -117,25 +116,6 @@ install_and_register_agent() {
     echo "Agent successfully registered."
 }
 
-# --- FINAL FIX: New robust function to append config blocks ---
-append_config_block() {
-    local config_block="$1"
-    local ossecConfPath="/Library/Ossec/etc/ossec.conf"
-    local tmpConfPath="/tmp/ossec.conf.append.tmp"
-
-    # Copy the file, excluding the final closing tag
-    grep -v "</ossec_config>" "$ossecConfPath" > "$tmpConfPath"
-    
-    # Append the new configuration block
-    echo "$config_block" >> "$tmpConfPath"
-    
-    # Add the closing tag back
-    echo "</ossec_config>" >> "$tmpConfPath"
-
-    # Replace the original file
-    mv "$tmpConfPath" "$ossecConfPath"
-}
-
 # --- 6. Apply Custom FIM and Log Collection Configuration ---
 configure_ossec_conf() {
     echo "--- Applying custom NixGuard configuration ---"
@@ -181,8 +161,10 @@ configure_ossec_conf() {
 </syscheck>
 EOM
     
-    # Use the robust append method instead of trying to replace text
-    append_config_block "$SYSCHECK_CONFIG"
+    # --- FINAL, SIMPLIFIED FIX: Append the configuration directly. ---
+    # This is the most robust method as it makes no assumptions about the file's contents.
+    echo "$SYSCHECK_CONFIG" >> "$ossecConfPath"
+    # --- END FIX ---
 
     echo "Custom FIM configuration applied successfully."
 }
@@ -204,6 +186,7 @@ install_filevault_monitoring() {
     echo "--- Installing and scheduling FileVault encryption monitoring ---"
     local scriptPath="/Library/Ossec/bin/filevault_check.sh"
     local plistPath="/Library/LaunchDaemons/com.nixguard.filevaultcheck.plist"
+    local ossecConfPath="/Library/Ossec/etc/ossec.conf"
 
     curl -Lo "$scriptPath" "$FILEVAULT_SCRIPT_URL"
     chmod 750 "$scriptPath"
@@ -240,8 +223,9 @@ EOM
 </localfile>
 EOM
     
-    # Use the robust append method
-    append_config_block "$FILEVAULT_LOG_CONFIG"
+    # --- FINAL, SIMPLIFIED FIX: Append the configuration directly. ---
+    echo "$FILEVAULT_LOG_CONFIG" >> "$ossecConfPath"
+    # --- END FIX ---
 
     echo "FileVault monitoring script installed and scheduled."
 }
