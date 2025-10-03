@@ -78,7 +78,6 @@ uninstall_wazuh_agent() {
     if [ -f "/Library/Ossec/bin/wazuh-uninstall.sh" ]; then
         echo "Found existing agent. Running official uninstaller..."
         /Library/Ossec/bin/wazuh-uninstall.sh
-    # --- SYNTAX FIX: Replaced `{` with `then` ---
     elif [ -d "/Library/Ossec" ]; then
         echo "Found legacy agent directory. Forcibly removing..."
         /Library/Ossec/bin/wazuh-control stop >/dev/null 2>&1 || true
@@ -92,15 +91,28 @@ uninstall_wazuh_agent() {
 install_and_register_agent() {
     echo "--- Installing and Registering Wazuh Agent ---"
     ARCH=$(uname -m)
-    if [ "$ARCH" == "x86_64" ]; then WAZUH_PKG_URL=$WAZUH_PKG_URL_INTEL;
+    if [ "$ARCH" == "x88_64" ]; then WAZUH_PKG_URL=$WAZUH_PKG_URL_INTEL;
     elif [ "$ARCH" == "arm64" ]; then WAZUH_PKG_URL=$WAZUH_PKG_URL_ARM;
     else echo "Error: Unsupported architecture: $ARCH"; exit 1; fi
     curl -Lo "/tmp/wazuh-agent.pkg" "$WAZUH_PKG_URL"
-    WAZUH_MANAGER="${MANAGER_IP}" WAZUH_AGENT_NAME="${AGENT_NAME}" WAZUH_GROUP="${GROUP_LABEL}" \
+    
+    # This step correctly sets the manager IP in the config file.
+    WAZUH_MANAGER="${MANAGER_IP}" \
+    WAZUH_AGENT_NAME="${AGENT_NAME}" \
+    WAZUH_GROUP="${GROUP_LABEL}" \
     installer -pkg "/tmp/wazuh-agent.pkg" -target /
+    
     rm -f "/tmp/wazuh-agent.pkg"
-    /Library/Ossec/bin/agent-auth -m "${MANAGER_IP}" -A "${API_KEY}"
-    echo "Agent successfully installed and registered."
+    echo "Agent package installed."
+
+    # --- THE FIX ---
+    # The -A flag requires the AGENT_NAME, not the API_KEY.
+    # This command now correctly requests enrollment for the specified agent name.
+    echo "Registering agent '${AGENT_NAME}' with manager..."
+    /Library/Ossec/bin/agent-auth -m "${MANAGER_IP}" -A "${AGENT_NAME}"
+    # --- END FIX ---
+    
+    echo "Agent successfully registered."
 }
 
 # --- 6. Apply Custom FIM and Log Collection Configuration ---
@@ -109,9 +121,6 @@ configure_ossec_conf() {
     local ossecConfPath="/Library/Ossec/etc/ossec.conf"
     
     echo "Applying File Integrity Monitoring (FIM) rules..."
-
-    # --- ROBUSTNESS FIX: Use a single, atomic awk command to replace the FIM block ---
-    # This is safer than deleting and then adding in separate steps.
     read -r -d '' SYSCHECK_CONFIG <<'EOM'
 <syscheck>
   <directories check_all="yes" realtime="yes">/Applications</directories>
