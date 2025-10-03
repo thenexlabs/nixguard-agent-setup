@@ -8,12 +8,10 @@
 # curl -sS https://.../agent-automatic-setup.sh | sudo bash -s -- <MANAGER_IP> <AGENT_NAME> <API_KEY>
 #
 
-# --- FIX: Use set -E to ensure ERR traps are inherited in subshells ---
 # Exit immediately if any command fails for robust error handling.
 set -e
 # Ensure the ERR trap is inherited by functions, command substitutions, and subshells.
 set -E
-# --- END FIX ---
 
 # --- 1. Validate Input & Define Variables ---
 if [ "$#" -ne 3 ]; then
@@ -28,22 +26,17 @@ API_KEY=$3
 GROUP_LABEL="default"
 
 # --- Create a unique agent name for CI/CD or re-run environments ---
-# A unique suffix is always added to prevent registration failures on re-runs.
 if [ -n "$GITHUB_RUN_ID" ]; then
-  # In GitHub Actions, use the run ID for a predictable unique name.
   UNIQUE_SUFFIX="${GITHUB_RUN_ID}"
   echo "GitHub Actions environment detected. Using run ID for unique agent name."
 else
-  # Outside of CI, use a timestamp to ensure uniqueness on every run.
   UNIQUE_SUFFIX=$(date +%s)
   echo "Using timestamp for unique agent name to prevent collisions."
 fi
-
-# Append the unique suffix to the base name provided by the user.
 AGENT_NAME="${AGENT_NAME_BASE}-${UNIQUE_SUFFIX}"
 echo "Final agent name will be: ${AGENT_NAME}"
 
-# URLs for Wazuh packages and NixGuard scripts
+# URLs
 WAZUH_PKG_URL_INTEL="https://packages.wazuh.com/4.x/macos/wazuh-agent-4.7.4-1.intel64.pkg"
 WAZUH_PKG_URL_ARM="https://packages.wazuh.com/4.x/macos/wazuh-agent-4.7.4-1.arm64.pkg"
 AR_SCRIPT_URL="https://raw.githubusercontent.com/thenexlabs/nixguard-agent-setup/main/mac/remove-threat.sh"
@@ -71,23 +64,10 @@ check_dependencies() {
 fetch_user_preferences() {
     local user_api_key="$1"
     echo "--- Fetching user compliance preferences ---"
-    
-    local api_payload
-    api_payload=$(printf '{"apiKey":"%s"}' "$user_api_key")
-
-    local response
-    response=$(curl --request POST \
-        --header "Content-Type: application/json" \
-        --silent --show-error \
-        --data "$api_payload" \
-        "$GET_USER_API_URL")
-
-    local jwt_payload
-    jwt_payload=$(echo "$response" | jq -r '.token | split(".")[1] | @base64d | fromjson')
-    
-    local standards
-    standards=$(echo "$jwt_payload" | jq -r '.cybersecurityPreferences.complianceStandards')
-    
+    local api_payload=$(printf '{"apiKey":"%s"}' "$user_api_key")
+    local response=$(curl --request POST --header "Content-Type: application/json" --silent --show-error --data "$api_payload" "$GET_USER_API_URL")
+    local jwt_payload=$(echo "$response" | jq -r '.token | split(".")[1] | @base64d | fromjson')
+    local standards=$(echo "$jwt_payload" | jq -r '.cybersecurityPreferences.complianceStandards')
     echo "$standards"
 }
 
@@ -120,25 +100,16 @@ install_and_register_agent() {
     else echo "Error: Unsupported architecture: $ARCH" >&2; exit 1; fi
     curl -Lo "/tmp/wazuh-agent.pkg" "$WAZUH_PKG_URL"
     
-    WAZUH_MANAGER="${MANAGER_IP}" \
-    WAZUH_AGENT_NAME="${AGENT_NAME}" \
-    WAZUH_GROUP="${GROUP_LABEL}" \
+    WAZUH_MANAGER="${MANAGER_IP}" WAZUH_AGENT_NAME="${AGENT_NAME}" WAZUH_GROUP="${GROUP_LABEL}" \
     installer -pkg "/tmp/wazuh-agent.pkg" -target /
     
     rm -f "/tmp/wazuh-agent.pkg"
     echo "Agent package installed."
 
     echo "Registering agent '${AGENT_NAME}' with manager..."
-    
-    # --- FINAL, DEFINITIVE FIX: Temporarily disable error checking ---
-    # The agent-auth command's execution triggers the ERR trap mid-stream
-    # in this specific shell environment. We must disable 'set -e' for this
-    # single command and then immediately re-enable it.
     set +e
     /Library/Ossec/bin/agent-auth -m "${MANAGER_IP}" -A "${AGENT_NAME}"
     set -e
-    # --- END FIX ---
-    
     echo "Agent successfully registered."
 }
 
@@ -146,18 +117,29 @@ install_and_register_agent() {
 configure_ossec_conf() {
     echo "--- Applying custom NixGuard configuration ---"
     local ossecConfPath="/Library/Ossec/etc/ossec.conf"
-    
     local timeout=30
     local counter=0
     echo "Waiting for configuration file to be created and populated..."
+
+    # --- FINAL FIX: The 'while' loop's condition returns a non-zero exit code
+    # until the file exists, which incorrectly triggers the ERR trap.
+    # We must temporarily disable 'set -e' for the duration of the loop.
+    set +e
     while [ ! -s "$ossecConfPath" ]; do
         if [ $counter -ge $timeout ]; then
-            echo "Error: Timed out waiting for '$ossecConfPath' to be created and populated." >&2
-            exit 1
+            break
         fi
         sleep 1
         counter=$((counter+1))
     done
+    set -e # Re-enable error checking immediately after the loop
+    # --- END FIX ---
+
+    # Now, explicitly check if the loop timed out and the file is still missing.
+    if [ ! -s "$ossecConfPath" ]; then
+        echo "Error: Timed out waiting for '$ossecConfPath' to be created and populated." >&2
+        exit 1
+    fi
     echo "Configuration file found and is not empty."
 
     echo "Applying File Integrity Monitoring (FIM) rules..."
@@ -181,23 +163,10 @@ configure_ossec_conf() {
   <ignore>/Users/*/Videos</ignore>
 </syscheck>
 EOM
-    # --- FINAL FIX: Robustly handle the perl command's exit code ---
     export SYSCHECK_CONFIG
-    set +e # Temporarily disable exit on error
     perl -p0e 's|<syscheck>.*?</syscheck>|$ENV{SYSCHECK_CONFIG}|s' "$ossecConfPath" > "$ossecConfPath.tmp"
-    PERL_EXIT_CODE=$? # Capture the exit code
-    set -e # Re-enable exit on error
-
-    # Explicitly check if the command succeeded and created a valid file
-    if [ $PERL_EXIT_CODE -ne 0 ] || [ ! -s "$ossecConfPath.tmp" ]; then
-        echo "Error: Perl command failed to create a valid temporary FIM configuration file. Exit code: $PERL_EXIT_CODE" >&2
-        exit 1
-    fi
-    
     mv "$ossecConfPath.tmp" "$ossecConfPath"
     unset SYSCHECK_CONFIG
-    # --- END FIX ---
-
     echo "Custom FIM configuration applied successfully."
 }
 
@@ -253,23 +222,10 @@ EOM
   <log_format>json</log_format>
 </localfile>
 EOM
-    # --- FINAL FIX: Robustly handle the perl command's exit code ---
     export FILEVAULT_LOG_CONFIG
-    set +e # Temporarily disable exit on error
     perl -p0e 's|(</ossec_config>)|$ENV{FILEVAULT_LOG_CONFIG}\n$1|' "$ossecConfPath" > "$ossecConfPath.tmp"
-    PERL_EXIT_CODE=$? # Capture the exit code
-    set -e # Re-enable exit on error
-
-    # Explicitly check if the command succeeded and created a valid file
-    if [ $PERL_EXIT_CODE -ne 0 ] || [ ! -s "$ossecConfPath.tmp" ]; then
-        echo "Error: Perl command failed to create a valid temporary FileVault configuration file. Exit code: $PERL_EXIT_CODE" >&2
-        exit 1
-    fi
-
     mv "$ossecConfPath.tmp" "$ossecConfPath"
     unset FILEVAULT_LOG_CONFIG
-    # --- END FIX ---
-
     echo "FileVault monitoring script installed and scheduled."
 }
 
@@ -287,7 +243,6 @@ cleanup_on_failure() {
     echo "Cleanup complete. The agent has been removed from this machine." >&2
 }
 
-# Trap any error signal (non-zero exit code) and run the cleanup function.
 trap cleanup_on_failure ERR
 
 echo "Starting NixGuard Agent Setup for macOS..."
@@ -316,8 +271,6 @@ fi
 
 if [ "$ENCRYPTION_REQUIRED" = true ]; then
     install_filevault_monitoring
-else
-    echo "User's compliance standards do not require encryption monitoring. Skipping."
 fi
 
 echo "--- Restarting Wazuh Agent to apply all changes ---"
