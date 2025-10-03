@@ -120,8 +120,11 @@ install_and_register_agent() {
     rm -f "/tmp/wazuh-agent.pkg"
     echo "Agent package installed."
 
-    echo "Registering agent '${AGENT_NAME}' with manager..."
-    /Library/Ossec/bin/agent-auth -m "${MANAGER_IP}" -A "${AGENT_NAME}"
+    # --- THE FIX: Add the -f flag to force re-registration on the manager ---
+    # This solves the "Duplicate agent name" error on subsequent runs.
+    echo "Registering agent '${AGENT_NAME}' with manager (forcing if pre-existing)..."
+    /Library/Ossec/bin/agent-auth -m "${MANAGER_IP}" -A "${AGENT_NAME}" -f
+    # --- END FIX ---
     
     echo "Agent successfully registered."
 }
