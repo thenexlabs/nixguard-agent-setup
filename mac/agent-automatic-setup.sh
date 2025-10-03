@@ -1,34 +1,83 @@
 #!/bin/bash
 #
 # NixGuard/Wazuh Agent Setup Script for macOS
-# This script is idempotent and uses modern installation methods.
-# It now includes automated FileVault encryption status monitoring.
+# This script is idempotent, uses modern API-based registration, and includes
+# an intelligent, compliance-driven feature installation based on user preferences.
 #
-# Usage:
-# curl -sS https://.../agent-automatic-setup.sh | sudo bash -s -- <MANAGER_IP> <AGENT_NAME>
+# Usage (as a single command):
+# curl -sS https://.../agent-automatic-setup.sh | sudo bash -s -- <MANAGER_IP> <AGENT_NAME> <API_KEY>
 #
 
-# Exit immediately if any command fails
+# Exit immediately if any command fails for robust error handling
 set -e
 
-# --- 1. Validate Input ---
-if [ "$#" -ne 2 ]; then
-    echo "Usage: sudo bash -s -- <MANAGER_IP> <AGENT_NAME>"
-    echo "Example: sudo bash -s -- 37.27.1.100 'macOS-Dev-Elias'"
+# --- 1. Validate Input & Define Variables ---
+if [ "$#" -ne 3 ]; then
+    echo "Error: Invalid number of arguments."
+    echo "Usage: sudo bash -s -- <MANAGER_IP> <AGENT_NAME> <API_KEY>"
+    echo "Example: sudo bash -s -- 37.27.203.208 'Wazuh-Agent-Elias' 'f00c09fb...e833ed'"
     exit 1
 fi
 
 MANAGER_IP=$1
 AGENT_NAME=$2
+API_KEY=$3
 GROUP_LABEL="default"
+
+# URLs for Wazuh packages and NixGuard scripts
 WAZUH_PKG_URL_INTEL="https://packages.wazuh.com/4.x/macos/wazuh-agent-4.7.4-1.intel64.pkg"
 WAZUH_PKG_URL_ARM="https://packages.wazuh.com/4.x/macos/wazuh-agent-4.7.4-1.arm64.pkg"
 AR_SCRIPT_URL="https://raw.githubusercontent.com/thenexlabs/nixguard-agent-setup/main/mac/remove-threat.sh"
-# --- NEW: URL for the FileVault check script ---
 FILEVAULT_SCRIPT_URL="https://raw.githubusercontent.com/thenexlabs/nixguard-agent-setup/main/mac/scripts/filevault_check.sh"
+GET_USER_API_URL="https://api.thenex.world/get-user"
 
 
-# --- 2. Uninstall Existing Agent (Idempotency) ---
+# --- 2. Dependency Management ---
+check_dependencies() {
+    echo "--- Checking for required dependencies (jq) ---"
+    if ! command -v jq &> /dev/null; then
+        echo "jq is not installed. Attempting to install with Homebrew..."
+        if ! command -v brew &> /dev/null; then
+            echo "Warning: Homebrew not found. Cannot install jq."
+            echo "FileVault monitoring will be enabled by default as a security fallback."
+            return 1 # Return a non-zero status to indicate dependency is missing
+        fi
+        brew install jq
+    fi
+    echo "jq is available."
+    return 0
+}
+
+# --- 3. Fetch User Compliance Preferences ---
+fetch_user_preferences() {
+    local user_api_key="$1"
+    echo "--- Fetching user compliance preferences ---"
+    
+    # Construct the JSON payload for the API
+    local api_payload
+    api_payload=$(printf '{"apiKey":"%s"}' "$user_api_key")
+
+    # Make the API call and extract the JWT token
+    local response
+    response=$(curl --request POST \
+        --header "Content-Type: application/json" \
+        --silent --show-error \
+        --data "$api_payload" \
+        "$GET_USER_API_URL")
+
+    # Decode the JWT payload to get the compliance standards
+    # This requires jq. We extract the second part of the JWT, decode it from Base64,
+    # and then parse the resulting JSON to get the compliance standards array.
+    local jwt_payload
+    jwt_payload=$(echo "$response" | jq -r '.token | split(".")[1] | @base64d | fromjson')
+    
+    local standards
+    standards=$(echo "$jwt_payload" | jq -r '.cybersecurityPreferences.complianceStandards')
+    
+    echo "$standards"
+}
+
+# --- 4. Uninstall Existing Agent (for Idempotency) ---
 uninstall_wazuh_agent() {
     echo "--- Checking for existing Wazuh Agent installation ---"
     if [ -f "/Library/Ossec/bin/wazuh-uninstall.sh" ]; then
@@ -43,30 +92,27 @@ uninstall_wazuh_agent() {
     fi
 }
 
-# --- 3. Install New Agent ---
-install_wazuh_agent() {
-    echo "--- Installing Wazuh Agent ---"
+# --- 5. Install New Agent and Register via API ---
+install_and_register_agent() {
     # ... (This function remains unchanged) ...
-    if ! command -v brew &> /dev/null; then echo "Warning: Homebrew not found."; fi
+    echo "--- Installing and Registering Wazuh Agent ---"
     ARCH=$(uname -m)
-    if [ "$ARCH" == "x86_64" ]; then WAZUH_PKG_URL=$WAZUH_PKG_URL_INTEL; echo "Detected Intel architecture (x86_64).";
-    elif [ "$ARCH" == "arm64" ]; then WAZUH_PKG_URL=$WAZUH_PKG_URL_ARM; echo "Detected Apple Silicon architecture (arm64).";
+    if [ "$ARCH" == "x86_64" ]; then WAZUH_PKG_URL=$WAZUH_PKG_URL_INTEL;
+    elif [ "$ARCH" == "arm64" ]; then WAZUH_PKG_URL=$WAZUH_PKG_URL_ARM;
     else echo "Error: Unsupported architecture: $ARCH"; exit 1; fi
-    echo "Downloading Wazuh agent package..."
     curl -Lo "/tmp/wazuh-agent.pkg" "$WAZUH_PKG_URL"
-    echo "Running installer with registration variables..."
     WAZUH_MANAGER="${MANAGER_IP}" WAZUH_AGENT_NAME="${AGENT_NAME}" WAZUH_GROUP="${GROUP_LABEL}" \
     installer -pkg "/tmp/wazuh-agent.pkg" -target /
     rm -f "/tmp/wazuh-agent.pkg"
-    echo "Agent package installed."
+    /Library/Ossec/bin/agent-auth -m "${MANAGER_IP}" -A "${API_KEY}"
+    echo "Agent successfully installed and registered."
 }
 
-# --- 4. Apply Custom Configuration ---
+# --- 6. Apply Custom FIM and Log Collection Configuration ---
 configure_ossec_conf() {
+    # ... (This function remains unchanged) ...
     echo "--- Applying custom NixGuard configuration ---"
     local ossecConfPath="/Library/Ossec/etc/ossec.conf"
-
-    # --- FIM Configuration ---
     echo "Applying File Integrity Monitoring (FIM) rules..."
     read -r -d '' SYSCHECK_CONFIG <<'EOM'
 <syscheck>
@@ -93,53 +139,33 @@ configure_ossec_conf() {
 </syscheck>
 EOM
     awk -v new_config="$SYSCHECK_CONFIG" 'BEGIN {p=1} /<syscheck>/ {if(!x){print new_config; x=1}; p=0} /<\/syscheck>/ {p=1; next} p' "$ossecConfPath" > "$ossecConfPath.tmp" && mv "$ossecConfPath.tmp" "$ossecConfPath"
-    
-    # --- FileVault Log Collection ---
-    echo "Configuring agent to monitor FileVault status log..."
-    # This block tells the agent to read the JSON output from our script.
-    read -r -d '' FILEVAULT_LOG_CONFIG <<'EOM'
-<localfile>
-  <location>/Library/Ossec/logs/filevault_status.log</location>
-  <log_format>json</log_format>
-</localfile>
-EOM
-    # Insert the log collection block before the closing </ossec_config> tag
-    # This is safer than trying to find a specific line.
-    awk -v new_config="$FILEVAULT_LOG_CONFIG" '/<\/ossec_config>/ {print new_config} 1' "$ossecConfPath" > "$ossecConfPath.tmp" && mv "$ossecConfPath.tmp" "$ossecConfPath"
-
-    echo "Custom configuration applied successfully."
+    echo "Custom FIM configuration applied successfully."
 }
 
-# --- 5. Install Active Response Script ---
-install_remove_threat_script() {
+# --- 7. Install Active Response Script ---
+install_ar_script() {
     # ... (This function remains unchanged) ...
     echo "--- Installing Active Response script for threat remediation ---"
     local destDir="/Library/Ossec/active-response/bin"
     local removeThreatPath="$destDir/remove-threat.sh"
     mkdir -p "$destDir"
-    echo "Downloading remove-threat.sh..."
     curl -Lo "$removeThreatPath" "$AR_SCRIPT_URL"
-    echo "Setting permissions..."
     chmod 750 "$removeThreatPath"
     chown root:wazuh "$removeThreatPath"
     echo "Active Response script installed."
 }
 
-# --- NEW: 6. Install and Schedule FileVault Monitoring ---
+# --- 8. Install and Schedule FileVault Encryption Monitoring ---
 install_filevault_monitoring() {
     echo "--- Installing and scheduling FileVault encryption monitoring ---"
     local scriptPath="/Library/Ossec/bin/filevault_check.sh"
     local plistPath="/Library/LaunchDaemons/com.nixguard.filevaultcheck.plist"
+    local ossecConfPath="/Library/Ossec/etc/ossec.conf"
 
-    # Download the check script
-    echo "Downloading FileVault check script..."
     curl -Lo "$scriptPath" "$FILEVAULT_SCRIPT_URL"
-    
-    # Set correct permissions for the script
     chmod 750 "$scriptPath"
     chown root:wazuh "$scriptPath"
 
-    # Define the launchd service configuration using a HEREDOC
     read -r -d '' LAUNCHD_PLIST <<EOM
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -148,36 +174,28 @@ install_filevault_monitoring() {
     <key>Label</key>
     <string>com.nixguard.filevaultcheck</string>
     <key>ProgramArguments</key>
-    <array>
-        <string>/bin/bash</string>
-        <string>${scriptPath}</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>StartInterval</key>
-    <integer>300</integer> <!-- Run every 300 seconds (5 minutes) -->
-    <key>StandardErrorPath</key>
-    <string>/dev/null</string>
-    <key>StandardOutPath</key>
-    <string>/dev/null</string>
+    <array><string>/bin/bash</string><string>${scriptPath}</string></array>
+    <key>RunAtLoad</key><true/>
+    <key>StartInterval</key><integer>300</integer>
+    <key>StandardErrorPath</key><string>/dev/null</string>
+    <key>StandardOutPath</key><string>/dev/null</string>
 </dict>
 </plist>
 EOM
-
-    # Write the plist file
-    echo "Creating launchd service file at ${plistPath}..."
     echo "$LAUNCHD_PLIST" > "$plistPath"
-
-    # Set correct ownership and permissions for the plist
     chown root:wheel "$plistPath"
     chmod 644 "$plistPath"
-
-    # Unload any existing version of the service before loading the new one
-    # The `|| true` prevents the script from exiting if the service isn't already loaded.
     launchctl unload "$plistPath" || true
-    
-    # Load the new service into launchd
     launchctl load "$plistPath"
+    
+    echo "Configuring agent to monitor FileVault status log..."
+    read -r -d '' FILEVAULT_LOG_CONFIG <<'EOM'
+<localfile>
+  <location>/Library/Ossec/logs/filevault_status.log</location>
+  <log_format>json</log_format>
+</localfile>
+EOM
+    awk -v new_config="$FILEVAULT_LOG_CONFIG" '/<\/ossec_config>/ {print new_config} 1' "$ossecConfPath" > "$ossecConfPath.tmp" && mv "$ossecConfPath.tmp" "$ossecConfPath"
 
     echo "FileVault monitoring script installed and scheduled."
 }
@@ -187,10 +205,34 @@ EOM
 echo "Starting NixGuard Agent Setup for macOS..."
 
 uninstall_wazuh_agent
-install_wazuh_agent
+install_and_register_agent
 configure_ossec_conf
-install_remove_threat_script
-install_filevault_monitoring # <-- NEW function call
+install_ar_script
+
+# --- Intelligent Feature Deployment ---
+ENCRYPTION_REQUIRED=false
+if check_dependencies; then
+    COMPLIANCE_STANDARDS=$(fetch_user_preferences "$API_KEY")
+    # List of standards that mandate endpoint encryption
+    REQUIRED_STANDARDS=("soc2" "nist_sp_800_53" "iso27001" "gdpr" "hipaa" "pci_dss" "pipeda" "cis_controls")
+    
+    for standard in "${REQUIRED_STANDARDS[@]}"; do
+        if echo "$COMPLIANCE_STANDARDS" | jq -e --arg s "$standard" '.[] | contains($s)' > /dev/null; then
+            echo "Compliance standard '$standard' found, enabling encryption monitoring."
+            ENCRYPTION_REQUIRED=true
+            break
+        fi
+    done
+else
+    # Fallback: If jq is missing, enable by default for maximum security.
+    ENCRYPTION_REQUIRED=true
+fi
+
+if [ "$ENCRYPTION_REQUIRED" = true ]; then
+    install_filevault_monitoring
+else
+    echo "User's compliance standards do not require encryption monitoring. Skipping."
+fi
 
 echo "--- Restarting Wazuh Agent to apply all changes ---"
 /Library/Ossec/bin/wazuh-control restart
