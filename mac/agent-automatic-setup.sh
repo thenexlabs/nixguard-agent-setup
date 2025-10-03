@@ -83,11 +83,11 @@ uninstall_wazuh_agent() {
     if [ -f "/Library/Ossec/bin/wazuh-uninstall.sh" ]; then
         echo "Found existing agent. Running official uninstaller..."
         /Library/Ossec/bin/wazuh-uninstall.sh
-    elif [ -d "/Library/Ossec" ]; {
+    elif [ -d "/Library/Ossec" ]; then
         echo "Found legacy agent directory. Forcibly removing..."
         /Library/Ossec/bin/wazuh-control stop >/dev/null 2>&1 || true
         rm -rf /Library/Ossec
-    } else
+    else
         echo "Wazuh Agent not found. No uninstallation needed."
     fi
 }
