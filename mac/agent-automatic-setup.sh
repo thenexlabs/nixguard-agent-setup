@@ -198,7 +198,12 @@ install_filevault_monitoring() {
     echo "$LAUNCHD_PLIST" > "$plistPath"
     chown root:wheel "$plistPath"
     chmod 644 "$plistPath"
-    launchctl unload "$plistPath" || true
+    
+    # --- FINAL FIX: Suppress the harmless "Unload failed" error message ---
+    # We redirect stderr (2) to /dev/null to keep the logs clean for the user.
+    launchctl unload "$plistPath" 2>/dev/null || true
+    # --- END FIX ---
+    
     launchctl load "$plistPath"
     
     echo "Configuring agent to monitor FileVault status log by downloading config..."
