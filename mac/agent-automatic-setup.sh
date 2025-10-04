@@ -64,25 +64,26 @@ check_dependencies() {
 
 # --- 3. Fetch User Compliance Preferences ---
 fetch_user_preferences() {
-    echo "--- Fetching user compliance preferences ---"
+    # Redirect status messages to stderr (>&2) to prevent them from being captured.
+    echo "--- Fetching user compliance preferences ---" >&2
+    
     local user_api_key="$1"
     local api_payload=$(printf '{"apiKey":"%s"}' "$user_api_key")
-    # --- FINAL FIX: Make API call more robust ---
     local response
     response=$(curl --request POST --header "Content-Type: application/json" --silent --show-error --data "$api_payload" "$GET_USER_API_URL")
 
-    # Check for a valid response before trying to parse it.
     if [ -z "$response" ] || ! echo "$response" | jq -e '.token' > /dev/null 2>&1; then
-        echo "Warning: Could not retrieve a valid token from the user API. Proceeding with default settings." >&2
-        echo "[]" # Return an empty JSON array to prevent jq errors
+        echo "Warning: Could not retrieve a valid token from the user API." >&2
+        echo "[]" # Return an empty JSON array on stdout
         return
     fi
-    # --- END FIX ---
     
     local jwt_payload
     jwt_payload=$(echo "$response" | jq -r '.token | split(".")[1] | @base64d | fromjson')
     local standards
     standards=$(echo "$jwt_payload" | jq -r '.cybersecurityPreferences.complianceStandards')
+    
+    # This is the function's actual return value, so it stays on stdout.
     echo "$standards"
 }
 
@@ -239,35 +240,43 @@ configure_ossec_conf
 install_ar_script
 
 # --- Intelligent Feature Deployment ---
-# This entire block was missing from the execution flow.
 
-# 1. Start with the assumption that encryption is NOT required.
-ENCRYPTION_REQUIRED=true
+# 1. Start with the default state: encryption is NOT required.
+ENCRYPTION_REQUIRED=false
 
 # 2. Check for reasons to enable it.
 if ! check_dependencies; then
-    # Reason 1: Dependencies are missing. Fail-safe to secure mode.
+    # Reason 1: Dependencies are missing. Fail-safe to the secure option.
+    echo "Warning: jq dependency not met. Defaulting to encryption monitoring enabled." >&2
     ENCRYPTION_REQUIRED=true
 else
-    # Dependencies are present, so we can check the user's preferences.
+    # Dependencies are fine, so we can check the user's actual preferences.
     COMPLIANCE_STANDARDS=$(fetch_user_preferences "$API_KEY")
+    
+    # --- DEBUGGING: Print the exact data received from the API ---
+    echo "--- Compliance Standards from API ---" >&2
+    echo "$COMPLIANCE_STANDARDS" >&2
+    echo "-------------------------------------" >&2
+
+    # This is the full, correct list of standards.
     REQUIRED_STANDARDS=("soc2" "nist_sp_800_53" "iso27001" "gdpr" "hipaa" "pci_dss" "pipeda" "cis_controls")
     
     for standard in "${REQUIRED_STANDARDS[@]}"; do
-        if echo "$COMPLIANCE_STANDARDS" | jq -e '.[] | contains($s)' --arg s "$standard" > /dev/null 2>&1; then
-            # Reason 2: A compliance standard requires it.
-            echo "Compliance standard '$standard' found, enabling encryption monitoring."
+        # The jq command checks if the JSON array contains the current standard.
+        if echo "$COMPLIANCE_STANDARDS" | jq -e --arg s "$standard" '. | index($s)' > /dev/null 2>&1; then
+            # Reason 2: The user's profile requires it.
+            echo "Compliance standard '$standard' found, enabling encryption monitoring." >&2
             ENCRYPTION_REQUIRED=true
             break
         fi
     done
 fi
 
-# 3. Make the final decision based on the outcome.
+# 3. Make the final decision.
 if [ "$ENCRYPTION_REQUIRED" = true ]; then
     install_filevault_monitoring
 else
-    echo "User's compliance standards do not require encryption monitoring. Skipping."
+    echo "User's compliance standards do not require encryption monitoring. Skipping." >&2
 fi
 
 # --- End of Intelligent Feature Deployment block ---
