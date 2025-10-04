@@ -25,16 +25,16 @@ AGENT_NAME_BASE=$2 # Store the base name
 API_KEY=$3
 GROUP_LABEL="default"
 
-# --- Create a unique agent name for CI/CD or re-run environments ---
-if [ -n "$GITHUB_RUN_ID" ]; then
-  UNIQUE_SUFFIX="${GITHUB_RUN_ID}"
-  echo "GitHub Actions environment detected. Using run ID for unique agent name."
-else
-  UNIQUE_SUFFIX=$(date +%s)
-  echo "Using timestamp for unique agent name to prevent collisions."
-fi
-AGENT_NAME="${AGENT_NAME_BASE}-${UNIQUE_SUFFIX}"
-echo "Final agent name will be: ${AGENT_NAME}"
+# # --- Create a unique agent name for CI/CD or re-run environments ---
+# if [ -n "$GITHUB_RUN_ID" ]; then
+#   UNIQUE_SUFFIX="${GITHUB_RUN_ID}"
+#   echo "GitHub Actions environment detected. Using run ID for unique agent name."
+# else
+#   UNIQUE_SUFFIX=$(date +%s)
+#   echo "Using timestamp for unique agent name to prevent collisions."
+# fi
+# AGENT_NAME="${AGENT_NAME_BASE}-${UNIQUE_SUFFIX}"
+# echo "Final agent name will be: ${AGENT_NAME}"
 
 # URLs
 REPO_BASE_URL="https://raw.githubusercontent.com/thenexlabs/nixguard-agent-setup/main/mac"
