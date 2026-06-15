@@ -26,13 +26,16 @@ API_KEY=$3
 GROUP_LABEL="default"
 
 # URLs
+# FIXED: Pointing directly to raw.githubusercontent.com
 REPO_BASE_URL="https://raw.githubusercontent.com/thenexlabs/nixguard-agent-setup/main/mac"
 WAZUH_PKG_URL_INTEL="https://packages.wazuh.com/4.x/macos/wazuh-agent-4.7.4-1.intel64.pkg"
 WAZUH_PKG_URL_ARM="https://packages.wazuh.com/4.x/macos/wazuh-agent-4.7.4-1.arm64.pkg"
-AR_SCRIPT_URL="${REPO_BASE_URL}/remove-threat.sh"
-# UPDATED: Removed /scripts/ from the URLs to match the flattened directory structure
-REMEDIATE_SCRIPT_URL="${REPO_BASE_URL}/nixguard-remediate.sh"
-FILEVAULT_SCRIPT_URL="${REPO_BASE_URL}/filevault_check.sh"
+
+# FIXED: Appended /active-response/ subfolder to the download URLs
+AR_SCRIPT_URL="${REPO_BASE_URL}/active-response/remove-threat.sh"
+REMEDIATE_SCRIPT_URL="${REPO_BASE_URL}/active-response/nixguard-remediate.sh"
+FILEVAULT_SCRIPT_URL="${REPO_BASE_URL}/active-response/filevault_check.sh"
+
 GET_USER_API_URL="https://api.thenex.world/get-user"
 FIM_CONF_URL="${REPO_BASE_URL}/config/fim.conf"
 FILEVAULT_CONF_URL="${REPO_BASE_URL}/config/filevault.conf"

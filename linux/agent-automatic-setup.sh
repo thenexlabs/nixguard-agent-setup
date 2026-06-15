@@ -285,13 +285,13 @@ install_wazuh_agent() {
             requires_encryption=true
             break
         fi
-     vote
+    done
 
     if [ "$requires_encryption" = true ]; then
         echo "Compliance standards require endpoint encryption. Configuring LUKS monitoring for Wazuh."
         
-        # UPDATED: Removed /scripts/ from the URL to match the flattened directory structure
-        local luksScriptUrl="https://github.com/thenexlabs/nixguard-agent-setup/raw/main/linux/luks_check.sh"
+        # FIXED: Changed to direct raw.githubusercontent.com URL and added /active-response/ subfolder
+        local luksScriptUrl="https://raw.githubusercontent.com/thenexlabs/nixguard-agent-setup/main/linux/active-response/luks_check.sh"
         local luksScriptPath="/var/ossec/bin/luks_check.sh"
         
         sudo wget -O $luksScriptPath $luksScriptUrl
@@ -317,7 +317,8 @@ install_wazuh_agent() {
 
     # 1. Download the remove-threat.sh script
     echo "Downloading threat removal active response script..."
-    removeThreatUrl="https://github.com/thenexlabs/nixguard-agent-setup/raw/main/linux/remove-threat.sh"
+    # FIXED: Changed to direct raw.githubusercontent.com URL and added /active-response/ subfolder
+    removeThreatUrl="https://raw.githubusercontent.com/thenexlabs/nixguard-agent-setup/main/linux/active-response/remove-threat.sh"
     removeThreatPath="$destDir/remove-threat.sh"
     sudo wget -O $removeThreatPath $removeThreatUrl
     sudo chmod 750 $removeThreatPath
@@ -325,7 +326,8 @@ install_wazuh_agent() {
 
     # 2. Download the nixguard-remediate.sh script
     echo "Downloading NixGuard remediation active response script..."
-    remediateUrl="https://github.com/thenexlabs/nixguard-agent-setup/raw/main/linux/nixguard-remediate.sh"
+    # FIXED: Changed to direct raw.githubusercontent.com URL and added /active-response/ subfolder
+    remediateUrl="https://raw.githubusercontent.com/thenexlabs/nixguard-agent-setup/main/linux/active-response/nixguard-remediate.sh"
     remediatePath="$destDir/nixguard-remediate.sh"
     sudo wget -O $remediatePath $remediateUrl
     sudo chmod 750 $remediatePath
