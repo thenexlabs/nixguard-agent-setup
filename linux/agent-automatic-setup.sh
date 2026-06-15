@@ -1,16 +1,17 @@
 #!/bin/bash
-# ./scriptname.sh "your_manager_ip" "your_agent_name"
+# Usage: sudo ./agent-automatic-setup.sh <manager_ip> <agent_name> <api_key>
 
-# Check if two arguments are passed
-if [ "$#" -ne 2 ]; then
-    echo "Usage: ./scriptname.sh <manager_ip> <agent_name>"
+# Check if three arguments are passed
+if [ "$#" -ne 3 ]; then
+    echo "Error: Invalid number of arguments." >&2
+    echo "Usage: sudo $0 <manager_ip> <agent_name> <api_key>" >&2
     exit 1
 fi
 
-# Define the manager IP agent name, group label from command-line arguments
+# Define variables from command-line arguments
 MANAGER_IP=$1
 AGENT_NAME=$2
-GROUP_LABEL=$3
+API_KEY=$3
 
 # Function to detect the distribution and architecture
 detect_distro_arch() {
@@ -33,25 +34,68 @@ detect_distro_arch() {
     fi
 }
 
+# Function to install initial bootstrapping dependencies (curl, jq)
+install_bootstrap_dependencies() {
+    echo "Installing bootstrapping dependencies (curl, jq)..."
+    if [ "$distro" == "debian" ] || [ "$distro" == "ubuntu" ] || [ "$distro" == "kali" ]; then
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq curl jq wget
+    elif [ "$distro" == "centos" ] || [ "$distro" == "rhel" ] || [ "$distro" == "fedora" ]; then
+        sudo yum install -y -q curl jq wget
+    fi
+}
+
+# Function to decode JWT payload in pure bash
+decode_jwt_payload() {
+    local token="$1"
+    local payload
+    payload=$(echo "$token" | cut -d'.' -f2)
+    
+    # Add padding if necessary
+    local len=${#payload}
+    local pad=$(( (4 - len % 4) % 4 ))
+    if [ $pad -eq 1 ]; then payload="${payload}="
+    elif [ $pad -eq 2 ]; then payload="${payload}=="
+    elif [ $pad -eq 3 ]; then payload="${payload}==="
+    fi
+    
+    # Convert base64url to standard base64 and decode
+    echo "$payload" | tr '_-' '/+' | base64 -d 2>/dev/null
+}
+
+# Function to fetch compliance standards from NixGuard API
+fetch_compliance_standards() {
+    local api_key="$1"
+    local api_url="https://api.thenex.world/get-user"
+    local api_payload
+    api_payload=$(printf '{"apiKey":"%s"}' "$api_key")
+    
+    local response
+    response=$(curl -s -X POST -H "Content-Type: application/json" -d "$api_payload" "$api_url")
+    
+    local token
+    token=$(echo "$response" | jq -r '.token' 2>/dev/null)
+    
+    if [ -n "$token" ] && [ "$token" != "null" ]; then
+        local decoded_payload
+        decoded_payload=$(decode_jwt_payload "$token")
+        echo "$decoded_payload" | jq -r '.cybersecurityPreferences.complianceStandards[]' 2>/dev/null
+    fi
+}
+
 # Function to uninstall Wazuh agent
 uninstall_wazuh_agent() {
-    if [ "$distro" == "debian" ] || [ "$distro" == "ubuntu" ] || [ "$distro" == "kali" ]; then
-        if systemctl list-units --full --all | grep -Fq 'wazuh-agent'; then
-            sudo systemctl stop wazuh-agent
+    echo "Checking for existing Wazuh Agent installations..."
+    if systemctl list-units --full --all | grep -Fq 'wazuh-agent'; then
+        echo "Stopping and removing existing wazuh-agent..."
+        sudo systemctl stop wazuh-agent
+        if [ "$distro" == "debian" ] || [ "$distro" == "ubuntu" ] || [ "$distro" == "kali" ]; then
             sudo dpkg -r wazuh-agent
-        else
-            echo "wazuh-agent is not installed"
-        fi
-    elif [ "$distro" == "centos" ] || [ "$distro" == "rhel" ] || [ "$distro" == "fedora" ]; then
-        if systemctl list-units --full --all | grep -Fq 'wazuh-agent'; then
-            sudo systemctl stop wazuh-agent
+        elif [ "$distro" == "centos" ] || [ "$distro" == "rhel" ] || [ "$distro" == "fedora" ]; then
             sudo rpm -e wazuh-agent
-        else
-            echo "wazuh-agent is not installed"
         fi
     else
-        echo "Unsupported distribution: $distro"
-        exit 1
+        echo "No existing wazuh-agent installation found."
     fi
 }
 
@@ -59,51 +103,25 @@ uninstall_wazuh_agent() {
 fix_dependencies() {
     echo "Starting dependency fix process..."
 
-    # Update the package lists
-    sudo DEBIAN_FRONTEND=noninteractive apt-get update
-    if [ $? -ne 0 ]; then
-        echo "Failed to update package lists. Please check your network connection."
-        return 1
-    fi
-
-    # Attempt to fix broken dependencies
-    sudo DEBIAN_FRONTEND=noninteractive apt-get -f install -y
-    if [ $? -ne 0 ]; then
-        echo "Failed to fix broken dependencies. Please check the logs for more details."
-        return 1
-    fi
-
-    # Install auditd and ensure it's running based on the distro
     if [ "$distro" == "debian" ] || [ "$distro" == "ubuntu" ] || [ "$distro" == "kali" ]; then
+        sudo DEBIAN_FRONTEND=noninteractive apt-get update
+        sudo DEBIAN_FRONTEND=noninteractive apt-get -f install -y
         sudo apt-get install -y auditd audispd-plugins
         if [ $? -ne 0 ]; then
-            echo "Failed to install auditd on $distro. Please check the logs for more details."
-            return 1
-        fi
-        sudo systemctl enable auditd
-        sudo systemctl start auditd
-        if [ $? -ne 0 ]; then
-            echo "Failed to start auditd on $distro. Please check the logs for more details."
+            echo "Failed to install auditd on $distro."
             return 1
         fi
     elif [ "$distro" == "centos" ] || [ "$distro" == "rhel" ] || [ "$distro" == "fedora" ]; then
         sudo yum install -y audit
         if [ $? -ne 0 ]; then
-            echo "Failed to install auditd on $distro. Please check the logs for more details."
+            echo "Failed to install auditd on $distro."
             return 1
         fi
-        sudo systemctl enable auditd
-        sudo systemctl start auditd
-        if [ $? -ne 0 ]; then
-            echo "Failed to start auditd on $distro. Please check the logs for more details."
-            return 1
-        fi
-    else
-        echo "Unsupported distribution: $distro"
-        return 1
     fi
 
-    # Ensure auditd is not disabled by default
+    sudo systemctl enable auditd
+    sudo systemctl start auditd
+
     if auditctl -l | grep -q '^-a never,task'; then
         sudo sed -i '/^-a never,task/d' /etc/audit/rules.d/audit.rules
         sudo systemctl restart auditd
@@ -115,13 +133,8 @@ fix_dependencies() {
 
 remove_directories_tags() {
     local ossecConfPath=$1
-
-    # Backup the original file
     sudo cp $ossecConfPath ${ossecConfPath}.bak
-
-    # Remove all <directories> tags and their content
     sudo sed -i '/<directories>/,/<\/directories>/d' $ossecConfPath
-
     echo "All <directories> tags have been removed."
 }
 
@@ -130,21 +143,17 @@ add_new_directories() {
     shift
     local directories=("$@")
 
-    # Check if the syscheck section exists
     if ! sudo grep -q "<syscheck>" $ossecConfPath; then
-        # If syscheck section does not exist, create it
         sudo sed -i '/<\/ossec_config>/i \ \ <syscheck>\n\ \ </syscheck>' $ossecConfPath
     fi
 
-    # Find the line number of the comment containing the word "Directories"
-    local line_number=$(sudo grep -n "Directories" $ossecConfPath | cut -d: -f1)
+    local line_number
+    line_number=$(sudo grep -n "Directories" $ossecConfPath | cut -d: -f1)
 
-    # Insert the new directories after the comment containing the word "Directories"
     for (( i=${#directories[@]}-1 ; i>=0 ; i-- )); do
         sudo sed -i "${line_number}a \ \ ${directories[$i]}" $ossecConfPath
     done
-
-    echo "New <directories> tags have been added after the comment containing the word 'Directories'."
+    echo "New <directories> tags have been added."
 }
 
 add_ignore_directories() {
@@ -152,162 +161,193 @@ add_ignore_directories() {
     shift
     local ignore_directories=("$@")
 
-    # Check if the syscheck section exists
     if ! sudo grep -q "<syscheck>" $ossecConfPath; then
-        # If syscheck section does not exist, create it
         sudo sed -i '/<\/ossec_config>/i \ \ <syscheck>\n\ \ </syscheck>' $ossecConfPath
     fi
 
-    # Find the line number of the comment containing the words "Files/directories to ignore"
-    local line_number=$(sudo grep -n "<!-- Files/directories to ignore -->" $ossecConfPath | cut -d: -f1)
+    local line_number
+    line_number=$(sudo grep -n "<!-- Files/directories to ignore -->" $ossecConfPath | cut -d: -f1)
 
-    # Insert the new ignore directories after the comment
     for (( i=${#ignore_directories[@]}-1 ; i>=0 ; i-- )); do
         sudo sed -i "${line_number}a \ \ ${ignore_directories[$i]}" $ossecConfPath
     done
-
-    echo "New <ignore> tags have been added after the comment 'Files/directories to ignore'."
+    echo "New <ignore> tags have been added."
 }
 
-# Function to install Wazuh agent
+optimize_syscheck_performance() {
+    local ossecConfPath=$1
+    echo "Optimizing Syscheck (FIM) performance to prevent high CPU/IO usage..."
+    
+    # Remove any pre-existing performance tags to prevent XML parser errors from duplicates
+    sudo sed -i '/<frequency>/d' $ossecConfPath
+    sudo sed -i '/<max_eps>/d' $ossecConfPath
+    sudo sed -i '/<process_priority>/d' $ossecConfPath
+    sudo sed -i '/<sleep>/d' $ossecConfPath
+    sudo sed -i '/<nodiff>/d' $ossecConfPath
+    
+    # Inject clean, optimized parameters right after the <syscheck> tag
+    sudo sed -i '/<syscheck>/a \ \ \ \ <max_eps>50</max_eps>\n\ \ \ \ <frequency>43200</frequency>\n\ \ \ \ <process_priority>10</process_priority>\n\ \ \ \ <sleep>20</sleep>' $ossecConfPath
+    
+    # Add nodiff tags to prevent memory spikes on large binaries
+    sudo sed -i '/<\/syscheck>/i \ \ \ \ <nodiff>/bin</nodiff>\n\ \ \ \ <nodiff>/sbin</nodiff>\n\ \ \ \ <nodiff>/usr/bin</nodiff>\n\ \ \ \ <nodiff>/usr/sbin</nodiff>' $ossecConfPath
+    
+    echo "Syscheck performance optimized."
+}
+
+# Function to install and configure Wazuh agent
 install_wazuh_agent() {
     local WAZUH_MANAGER="$MANAGER_IP"
     local WAZUH_AGENT_NAME="$AGENT_NAME"
-    local WAZUH_AGENT_GROUP="default"  # Adding the missing agent group
+    local WAZUH_AGENT_GROUP="default"
 
     echo "Private cloud SOC IP: $WAZUH_MANAGER"
     echo "Agent name: $WAZUH_AGENT_NAME"
     echo "Agent group: $WAZUH_AGENT_GROUP"
 
+    # ==========================================
+    # STEP 1: DISTRO-SPECIFIC PACKAGE INSTALLATION
+    # ==========================================
     if [ "$distro" == "debian" ] || [ "$distro" == "ubuntu" ] || [ "$distro" == "kali" ]; then
         if [ "$arch" == "amd64" ]; then
             sudo wget -O wazuh-agent_nixguard_amd64.deb https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_4.9.1-1_amd64.deb
-            sudo DEBIAN_FRONTEND=noninteractive dpkg -i ./wazuh-agent_nixguard_amd64.deb
+            sudo WAZUH_MANAGER="$WAZUH_MANAGER" WAZUH_AGENT_NAME="$WAZUH_AGENT_NAME" WAZUH_AGENT_GROUP="$WAZUH_AGENT_GROUP" DEBIAN_FRONTEND=noninteractive dpkg -i ./wazuh-agent_nixguard_amd64.deb
         elif [ "$arch" == "aarch64" ]; then
             sudo wget -O wazuh-agent_nixguard_arm64.deb https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_4.9.1-1_arm64.deb
-            sudo DEBIAN_FRONTEND=noninteractive dpkg -i ./wazuh-agent_nixguard_arm64.deb
+            sudo WAZUH_MANAGER="$WAZUH_MANAGER" WAZUH_AGENT_NAME="$WAZUH_AGENT_NAME" WAZUH_AGENT_GROUP="$WAZUH_AGENT_GROUP" DEBIAN_FRONTEND=noninteractive dpkg -i ./wazuh-agent_nixguard_arm64.deb
         fi
-
-        # Fix dependencies
-        fix_dependencies
-
-        # Define the path to the OSSEC configuration file
-        ossecConfPath="/var/ossec/etc/ossec.conf"
-
-        # Set the manager IP in the ossec.conf file
-        sudo sed -i "s/<address>.*<\/address>/<address>${WAZUH_MANAGER}<\/address>/g" $ossecConfPath
-
-        # Define the enrollment section
-        ENROLLMENT_SECTION="<enrollment>\n\t<enabled>yes</enabled>\n\t<manager_address>${WAZUH_MANAGER}</manager_address>\n\t<agent_name>${WAZUH_AGENT_NAME}</agent_name>\n</enrollment>"
-
-        # Add the enrollment section to the ossec.conf file
-        sudo awk -v enrollment="$ENROLLMENT_SECTION" '
-            /<client>/ { print; print enrollment; next }
-            !/<enrollment>/ { print }
-        ' "$ossecConfPath" > temp_ossec.conf && sudo mv temp_ossec.conf "$ossecConfPath"
-
-        # Update the log_format in the ossec.conf file to json
-        # sudo sed -i 's/<log_format>[^<]*<\/log_format>/<log_format>json<\/log_format>/' $ossecConfPath
-
-        # Define the new directories to monitor with whodata enabled
-        directories=(
-            "<directories check_all=\"yes\" realtime=\"yes\">/root</directories>"  # Root directory
-            # "<directories check_all=\"yes\" realtime=\"yes\">/etc</directories>"  # Configuration files
-            # "<directories check_all=\"yes\" realtime=\"yes\">/var</directories>"  # Variable files (limited)
-            # "<directories check_all=\"yes\" realtime=\"yes\">/usr</directories>"  # User programs
-            "<directories check_all=\"yes\" realtime=\"yes\">/home</directories>"  # Home directories
-            # "<directories check_all=\"yes\" realtime=\"yes\">/bin</directories>"  # Binaries
-            "<directories check_all=\"yes\" realtime=\"yes\">${HOME}/Downloads</directories>"  # User Downloads folder
-        )
-
-        # Excluding the /tmp directory as it typically contains many transient files
-
-        # Adding the ignore tag for /home/.cache
-        ignore_directories=(
-            "<ignore>${HOME}/.mozilla</ignore>"
-            "<ignore>${HOME}/.cache</ignore>"
-            "<ignore>${HOME}/.config</ignore>"
-            "<ignore>${HOME}/.local</ignore>"
-            "<ignore>${HOME}/.xsession-errors</ignore>"
-            "<ignore>/root/.wget-hsts</ignore>"
-            "<ignore>/root/.rpmdb</ignore>"
-        )
-
-        # Function to remove old directories tags
-        remove_directories_tags $ossecConfPath
-
-        # Function to add new directories tags
-        add_new_directories $ossecConfPath "${directories[@]}"
-
-        # Function to add ignore directories tags
-        add_ignore_directories $ossecConfPath "${ignore_directories[@]}"
-
-        echo "Directory monitoring configuration added successfully."
-
-        # Restart Wazuh Agent to apply the new configuration
-        sudo systemctl restart wazuh-agent
-
-        # Verify if the audit rules for monitoring the selected directories are applied
-        auditctl -l | grep wazuh_fim
-
-        echo "Wazuh agent installed and configured successfully."
-
-        ###########################################################################################
-
-        sudo apt update
-        sudo apt -y install jq
-
-        # Define the URL of the remove-threat.sh script
-        removeThreatUrl="https://github.com/thenexlabs/nixguard-agent-setup/raw/main/linux/remove-threat.sh"
-
-        # Define the destination directory
-        destDir="/var/ossec/active-response/bin"
-
-        # Define the path to save the remove-threat.sh script in the destination directory
-        removeThreatPath="$destDir/remove-threat.sh"
-
-        # Download the remove-threat.sh script
-        sudo wget -O $removeThreatPath $removeThreatUrl
-
-        sudo chmod 750 /var/ossec/active-response/bin/remove-threat.sh
-        sudo chown root:wazuh /var/ossec/active-response/bin/remove-threat.sh
-
-        echo "Virus threat response configuration added successfully."
-
-        ###########################################################################################
-
-        echo "NixGuard agent setup successfully."
     elif [ "$distro" == "centos" ] || [ "$distro" == "rhel" ] || [ "$distro" == "fedora" ]; then
         if [ "$arch" == "amd64" ]; then
             sudo wget -O wazuh-agent_nixguard.x86_64.rpm https://packages.wazuh.com/4.x/yum/wazuh-agent-4.9.1-1.x86_64.rpm
-            sudo WAZUH_MANAGER="$WAZUH_MANAGER" WAZUH_AGENT_NAME="$WAZUH_AGENT_NAME" rpm -ihv wazuh-agent_nixguard.x86_64.rpm
+            sudo WAZUH_MANAGER="$WAZUH_MANAGER" WAZUH_AGENT_NAME="$WAZUH_AGENT_NAME" WAZUH_AGENT_GROUP="$WAZUH_AGENT_GROUP" rpm -ihv wazuh-agent_nixguard.x86_64.rpm
         elif [ "$arch" == "aarch64" ]; then
             sudo wget -O wazuh-agent_nixguard.aarch64.rpm https://packages.wazuh.com/4.x/yum/wazuh-agent-4.9.1-1.aarch64.rpm
-            sudo WAZUH_MANAGER="$WAZUH_MANAGER" WAZUH_AGENT_NAME="$WAZUH_AGENT_NAME" rpm -ihv wazuh-agent_nixguard.aarch64.rpm
+            sudo WAZUH_MANAGER="$WAZUH_MANAGER" WAZUH_AGENT_NAME="$WAZUH_AGENT_NAME" WAZUH_AGENT_GROUP="$WAZUH_AGENT_GROUP" rpm -ihv wazuh-agent_nixguard.aarch64.rpm
         fi
     else
         echo "Unsupported distribution: $distro"
         exit 1
     fi
 
-    # Fix dependencies
+    # Fix dependencies immediately after package installation
     fix_dependencies
 
-    # Start the Wazuh agent
+    # ==========================================
+    # STEP 2: GLOBAL AGENT CONFIGURATION
+    # ==========================================
+    ossecConfPath="/var/ossec/etc/ossec.conf"
+
+    # Set the manager IP in the ossec.conf file
+    sudo sed -i "s|<address>MANAGER_IP</address>|<address>${WAZUH_MANAGER}</address>|g" $ossecConfPath
+
+    # Define the enrollment section
+    ENROLLMENT_SECTION="<enrollment>\n\t<enabled>yes</enabled>\n\t<manager_address>${WAZUH_MANAGER}</manager_address>\n\t<agent_name>${WAZUH_AGENT_NAME}</agent_name>\n</enrollment>"
+
+    # Add the enrollment section to the ossec.conf file
+    sudo awk -v enrollment="$ENROLLMENT_SECTION" '
+        /<client>/ { print; print enrollment; next }
+        !/<enrollment>/ { print }
+    ' "$ossecConfPath" > temp_ossec.conf && sudo mv temp_ossec.conf "$ossecConfPath"
+
+    # Scheduled /home Scanning to Prevent CPU Melt
+    directories=(
+        "<directories check_all=\"yes\" realtime=\"yes\">/root</directories>"
+        "<directories check_all=\"yes\" realtime=\"no\">/home</directories>"
+    )
+
+    # Regex-Based Ignores to Cover ALL Users in /home
+    ignore_directories=(
+        "<ignore type=\"sregex\">^/home/[^/]+/\.cache</ignore>"
+        "<ignore type=\"sregex\">^/home/[^/]+/\.mozilla</ignore>"
+        "<ignore type=\"sregex\">^/home/[^/]+/\.config</ignore>"
+        "<ignore type=\"sregex\">^/home/[^/]+/\.local</ignore>"
+        "<ignore type=\"sregex\">^/home/[^/]+/\.xsession-errors</ignore>"
+        "<ignore>/root/.wget-hsts</ignore>"
+        "<ignore>/root/.rpmdb</ignore>"
+    )
+
+    # Apply FIM directory configurations
+    remove_directories_tags $ossecConfPath
+    add_new_directories $ossecConfPath "${directories[@]}"
+    add_ignore_directories $ossecConfPath "${ignore_directories[@]}"
+
+    # Optimize Syscheck CPU/IO Performance
+    optimize_syscheck_performance $ossecConfPath
+
+    # ==========================================
+    # STEP 3: INTELLIGENT COMPLIANCE DEPLOYMENT (LUKS)
+    # ==========================================
+    local requires_encryption=false
+    local standards
+    standards=$(fetch_compliance_standards "$API_KEY")
+    
+    for std in $standards; do
+        if [[ "$std" =~ ^(soc2|nist_sp_800_53|iso27001|gdpr|hipaa|pci_dss|pipeda|cis_controls)$ ]]; then
+            requires_encryption=true
+            break
+        fi
+     vote
+
+    if [ "$requires_encryption" = true ]; then
+        echo "Compliance standards require endpoint encryption. Configuring LUKS monitoring for Wazuh."
+        
+        # UPDATED: Removed /scripts/ from the URL to match the flattened directory structure
+        local luksScriptUrl="https://github.com/thenexlabs/nixguard-agent-setup/raw/main/linux/luks_check.sh"
+        local luksScriptPath="/var/ossec/bin/luks_check.sh"
+        
+        sudo wget -O $luksScriptPath $luksScriptUrl
+        sudo chmod 750 $luksScriptPath
+        sudo chown root:wazuh $luksScriptPath
+
+        # Schedule cron job to run every 5 minutes
+        (sudo crontab -l 2>/dev/null | grep -v "luks_check.sh"; echo "*/5 * * * * $luksScriptPath >/dev/null 2>&1") | sudo crontab -
+
+        # Configure ossec.conf to monitor the log file
+        local logFileToMonitor="/var/log/luks_status.log"
+        local localfileBlock="<localfile>\n\t<location>${logFileToMonitor}</location>\n\t<log_format>json</log_format>\n</localfile>"
+        sudo sed -i "/<\/ossec_config>/i $localfileBlock" $ossecConfPath
+    else
+        echo "Compliance standards do not require encryption monitoring. Skipping LUKS configuration."
+    fi
+
+    # ==========================================
+    # STEP 4: ACTIVE RESPONSE REMEDIATION DEPLOYMENT
+    # ==========================================
+    destDir="/var/ossec/active-response/bin"
+    sudo mkdir -p $destDir
+
+    # 1. Download the remove-threat.sh script
+    echo "Downloading threat removal active response script..."
+    removeThreatUrl="https://github.com/thenexlabs/nixguard-agent-setup/raw/main/linux/remove-threat.sh"
+    removeThreatPath="$destDir/remove-threat.sh"
+    sudo wget -O $removeThreatPath $removeThreatUrl
+    sudo chmod 750 $removeThreatPath
+    sudo chown root:wazuh $removeThreatPath
+
+    # 2. Download the nixguard-remediate.sh script
+    echo "Downloading NixGuard remediation active response script..."
+    remediateUrl="https://github.com/thenexlabs/nixguard-agent-setup/raw/main/linux/nixguard-remediate.sh"
+    remediatePath="$destDir/nixguard-remediate.sh"
+    sudo wget -O $remediatePath $remediateUrl
+    sudo chmod 750 $remediatePath
+    sudo chown root:wazuh $remediatePath
+
+    echo "Active Response remediation configurations added successfully."
+
+    # ==========================================
+    # STEP 5: SERVICE STARTUP & VERIFICATION
+    # ==========================================
     sudo systemctl daemon-reload
     sudo systemctl enable wazuh-agent
-    sudo systemctl start wazuh-agent
+    sudo systemctl restart wazuh-agent
 
-    echo "NixGuard agent started successfully."
+    # Verify if the audit rules for monitoring the selected directories are applied
+    auditctl -l | grep wazuh_fim
+
+    echo "NixGuard agent setup and started successfully."
 }
 
 # Main script execution
-if [ $# -lt 2 ]; then
-    echo "Usage: $0 <WAZUH_MANAGER> <WAZUH_AGENT_NAME>"
-    exit 1
-fi
-
-# Function calls
 detect_distro_arch
+install_bootstrap_dependencies
 uninstall_wazuh_agent
 install_wazuh_agent

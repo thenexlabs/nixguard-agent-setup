@@ -31,7 +31,7 @@ function Uninstall-WazuhAgent {
         Start-Sleep -Seconds 5
     }
 
-    # Step 2: Find the Wazuh Agent installation by checking the registry (much faster and more reliable than Get-WmiObject).
+    # Step 2: Find the Wazuh Agent installation by checking the registry
     Write-Host "Searching for Wazuh Agent in the list of installed programs..."
     $uninstallPaths = @(
         "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
@@ -43,33 +43,27 @@ function Uninstall-WazuhAgent {
     if (-not $wazuhApp) {
         # --- AGENT NOT FOUND ---
         Write-Host "SUCCESS: Wazuh Agent was not found in the list of installed programs. No action needed." -ForegroundColor Green
-        # The return command exits the function immediately.
         return
     }
 
     # --- AGENT WAS FOUND ---
     Write-Host "Found Wazuh Agent. Running the official uninstaller silently..."
     
-    # The UninstallString contains the command to run, e.g., "MsiExec.exe /I{PRODUCT-CODE-GUID}"
-    # We will modify it to run silently.
     $uninstallCommand = $wazuhApp.UninstallString
     if ($uninstallCommand -like "MsiExec.exe*") {
-        # For MSI packages, we replace the interactive flag (/I) with the uninstall flag (/X) and add the quiet flag (/q).
         $productCode = $wazuhApp.PSChildName
         $command = "msiexec.exe"
         $arguments = "/x $productCode /q"
         Write-Host "Executing: $command $arguments"
         Start-Process -FilePath $command -ArgumentList $arguments -Wait -NoNewWindow
     } else {
-        # Fallback for non-MSI installers, though Wazuh uses MSI.
         Write-Host "Executing non-MSI uninstaller: $uninstallCommand"
-        Start-Process -FilePath $uninstallCommand -ArgumentList "/S" -Wait -NoNewWindow # /S is a common silent flag
+        Start-Process -FilePath $uninstallCommand -ArgumentList "/S" -Wait -NoNewWindow
     }
     
     Write-Host "Uninstaller process has finished."
 
     # --- Final Cleanup ---
-    # After a proper uninstall, the directory should be gone, but we check just in case.
     $agentDir = "C:\Program Files (x86)\ossec-agent"
     if (Test-Path $agentDir) {
         Write-Host "Performing post-uninstall cleanup of the installation directory..."
@@ -79,7 +73,6 @@ function Uninstall-WazuhAgent {
         if (!(Test-Path $agentDir)) {
             Write-Host "Directory successfully removed." -ForegroundColor Green
         } else {
-            # If it still fails, it's likely a stubborn orphaned process.
             Write-Error "FAILED to remove directory: $agentDir. A process may still be locking it. Please remove it manually or reboot."
         }
     } else {
@@ -94,7 +87,6 @@ Uninstall-WazuhAgent
 Remove-Item -Path (Join-Path -Path $env:TEMP -ChildPath "agent-automatic-setup.ps1") -ErrorAction SilentlyContinue
 
 # Install the Wazuh agent
-## loop until file is gone
 $fileExists = $true
 while ($fileExists) {
     if (Test-Path -Path $configPath) {
@@ -153,7 +145,6 @@ Set-Content -Path $configPath -Value $config
 
 # Define the API URL
 $API_URL = "https://api.thenex.world/get-user"
-# $API_URL = "http://localhost:9000/.netlify/functions/get-user"
 
 # Create the JSON payload
 $JSON_PAYLOAD = @{
@@ -171,14 +162,11 @@ Function Decode-JWT {
         [string]$jwtToken
     )
 
-    # Split the token into its three parts (header, payload, signature)
     $tokenParts = $jwtToken -split '\.'
 
     if ($tokenParts.Length -ge 2) {
-        # Get the payload (second part of the JWT token)
         $payload = $tokenParts[1]
 
-        # Convert Base64 URL to standard Base64
         $standardBase64Payload = $payload.Replace("-", "+").Replace("_", "/")
         switch ($standardBase64Payload.Length % 4) {
             1 { $standardBase64Payload += "===" }
@@ -187,13 +175,8 @@ Function Decode-JWT {
         }
 
         try {
-            # Decode the payload using UTF8 encoding
             $decodedPayload = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($standardBase64Payload))
-
-            # Parse the decoded payload JSON
             $payloadData = $decodedPayload | ConvertFrom-Json
-
-            # Return the parsed object
             return $payloadData
         } catch {
             Write-Error "Failed to decode payload: $_"
@@ -202,7 +185,6 @@ Function Decode-JWT {
         Write-Error "Invalid JWT token format."
     }
 
-    # Return $null if the function fails
     return $null
 }
 
@@ -211,13 +193,6 @@ $decodedPayload = Decode-JWT -jwtToken $token
 
 # Print or handle the decoded payload outside the function
 if ($decodedPayload -ne $null) {
-    # Write-Output "Decoded Payload:"
-    # Write-Output $decodedPayload | Format-List
-
-    # Write-Output "Decoded complianceStandards:"
-    # $decodedPayload.cybersecurityPreferences.complianceStandards | ForEach-Object { Write-Output "- $_" }
-
-    # Check if compliance standards require encryption
     $requiresEncryption = $false
 
     $requiredStandards = @(
@@ -232,7 +207,8 @@ if ($decodedPayload -ne $null) {
     )
 
     foreach ($standard in $requiredStandards) {
-        if ($decodedPayload.cybersecurityPreferences.complianceStandards -contains $standard) {            $requiresEncryption = $true
+        if ($decodedPayload.cybersecurityPreferences.complianceStandards -contains $standard) {            
+            $requiresEncryption = $true
             break
         }
     }
@@ -241,12 +217,12 @@ if ($decodedPayload -ne $null) {
         Write-Host "Compliance standards require endpoint encryption. Configuring BitLocker monitoring for Wazuh." -ForegroundColor Green
 
         # --- Define Paths and URL ---
-        $bitlockerScriptUrl = "https://github.com/thenexlabs/nixguard-agent-setup/raw/main/windows/scripts/bitlocker_check.ps1"
+        # UPDATED: Removed /scripts/ from the URL to match the new flattened directory structure
+        $bitlockerScriptUrl = "https://github.com/thenexlabs/nixguard-agent-setup/raw/main/windows/bitlocker_check.ps1"
         $wazuhAgentPath = "C:\Program Files (x86)\ossec-agent"
         $destinationScriptPath = Join-Path $wazuhAgentPath "bitlocker_check.ps1"
         
         # Download the PowerShell check script from GitHub ---
-        # This script now writes its output to a file instead of the console.
         Write-Host "Downloading BitLocker check script from $bitlockerScriptUrl..."
         try {
             if (-not (Test-Path $wazuhAgentPath)) {
@@ -261,68 +237,44 @@ if ($decodedPayload -ne $null) {
             exit 1 
         }
 
-        # ====================================================================================
-        # --- FINAL VERSION: CREATE A RELIABLE, REPEATING SCHEDULED TASK (CORRECTED SYNTAX) ---
-        # ====================================================================================
+        # --- CREATE A RELIABLE, REPEATING SCHEDULED TASK ---
         Write-Host "Creating a reliable, repeating Scheduled Task for BitLocker monitoring..."
         try {
-            # Define the action: run the PowerShell script.
-            $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-File `"$destinationScriptPath`""
-
-            # --- THIS IS THE CORRECTED TRIGGER LOGIC ---
-            # We create a trigger that starts in one minute and repeats every 5 minutes indefinitely.
-            # RepetitionInterval is a direct parameter of the cmdlet, not a sub-property.
+            $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-ExecutionPolicy Bypass -File `"$destinationScriptPath`""
             $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(1)) -RepetitionInterval (New-TimeSpan -Minutes 5)
-
-            # Define the principal: run as the SYSTEM account for highest reliability.
             $principal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-
-            # Define the settings for the task to ensure it runs reliably.
             $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
 
-            # Register the task with the system, replacing it if it already exists.
             Register-ScheduledTask -TaskName "Wazuh-BitLocker-Check" -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "Periodically checks BitLocker status for Wazuh monitoring." -Force
             
             Write-Host "Successfully created 'Wazuh-BitLocker-Check' scheduled task." -ForegroundColor Green
-
-            # Explicitly run the task immediately after creating it to guarantee a first run.
-            Write-Host "Forcing an immediate run of the scheduled task to generate the first log..."
             Start-ScheduledTask -TaskName "Wazuh-BitLocker-Check"
         }
         catch {
             Write-Error "CRITICAL: Failed to create or run the scheduled task. Error: $($_.Exception.Message)"
             exit 1
         }
-        # ====================================================================================
 
         # Modify ossec.conf to monitor the log file created by the Scheduled Task ---
         try {
             Write-Host "Modifying '$configPath' to monitor the BitLocker status log file..."
             [xml]$ossecConf = Get-Content -Path $configPath
 
-            # A) Add the <localfile> block to monitor the output log
             $logFileToMonitor = 'C:\ProgramData\Wazuh\logs\bitlocker_status.log'
             $existingLocalfile = $ossecConf.ossec_config.localfile | Where-Object { $_.location -eq $logFileToMonitor }
             if (-not $existingLocalfile) {
                 $localfileNode = $ossecConf.CreateElement('localfile')
-
-                # Tell Wazuh the location of the log file to watch
                 $localfileNode.AppendChild($ossecConf.CreateElement('location')).InnerText = $logFileToMonitor
-
-                # Tell Wazuh that every line in this file is a complete JSON object
                 $localfileNode.AppendChild($ossecConf.CreateElement('log_format')).InnerText = 'json'
-                
-                # Add the block to the configuration
                 $ossecConf.ossec_config.AppendChild($localfileNode) | Out-Null
                 Write-Host "Configured Wazuh to monitor the BitLocker status log file."
             } else {
                 Write-Host "BitLocker log file monitoring is already configured. Skipping."
             }
 
-            # B) Add File Integrity Monitoring (FIM) for the agent's own script (Still a good practice)
+            # Add File Integrity Monitoring (FIM) for the agent's own script
             $syscheckNode = $ossecConf.ossec_config.syscheck
             if ($syscheckNode) {
-                # Monitor both the script itself and the log it produces for tampering
                 $pathsToMonitor = @(
                     "C:\Program Files (x86)\ossec-agent",
                     "C:\ProgramData\Wazuh\logs"
@@ -342,10 +294,8 @@ if ($decodedPayload -ne $null) {
                 Write-Warning "Could not find '<syscheck>' node in ossec.conf to add FIM rule."
             }
             
-            # Save the final configuration file ---
             $ossecConf.Save($configPath)
             Write-Host "Successfully saved updated configuration to '$configPath'."
-
         }
         catch {
             Write-Error "An error occurred while modifying '$configPath'. Error: $($_.Exception.Message)"
@@ -368,14 +318,11 @@ $enrollmentSection = @"
 </enrollment>
 "@
 
-# Write-Host "enrollment sec: $enrollmentSection"
-
 # Read the ossec.conf file
 $content = Get-Content -Path $configPath -Raw
 
 # Check if the enrollment section already exists
 if ($content -notmatch '<enrollment>') {
-    # Add the enrollment section to the ossec.conf file
     $content = $content -replace '(?s)(<client>.*?)(</client>)', "`$1`n$enrollmentSection`n`$2"
 }
 
@@ -404,22 +351,28 @@ if (-not $syscheckNode) {
 $commentNode = $ossecConf.ossec_config.syscheck.SelectSingleNode("comment()[contains(.,'<!-- Default files to be monitored. -->')]")
 if ($commentNode) {
     $directories = @(
-        "$env:WINDIR\System32",  # Critical system files
-        "$env:ProgramFiles",  # Installed programs
-        "$env:ProgramFiles(x86)",  # 32-bit installed programs
-        "HKEY_LOCAL_MACHINE\SYSTEM",  # Registry settings
-        "$env:USERPROFILE",  # User profile
-        "$env:ProgramData",  # Program data
-        "$env:ProgramFiles\Common Files",  # Common program files
-        "$env:ProgramFiles(x86)\Common Files",  # 32-bit common program files
-        "$env:USERPROFILE\Downloads"  # User Downloads directory
+        "$env:WINDIR\System32",
+        "$env:ProgramFiles",
+        "$env:ProgramFiles(x86)",
+        "HKEY_LOCAL_MACHINE\SYSTEM",
+        "$env:USERPROFILE",
+        "$env:ProgramData",
+        "$env:ProgramFiles\Common Files",
+        "$env:ProgramFiles(x86)\Common Files",
+        "$env:USERPROFILE\Downloads"
     )
 
     foreach ($directory in $directories) {
         $newDirectoryNode = $ossecConf.CreateElement("directories")
         $newDirectoryNode.SetAttribute("check_all", "yes")
-        $newDirectoryNode.SetAttribute("whodata", "yes")
-        $newDirectoryNode.SetAttribute("realtime", "yes")
+        
+        # OPTIMIZATION: Only apply realtime and whodata to specific, low-noise directories.
+        # High-noise system directories (System32, ProgramData, etc.) will fall back to scheduled scans.
+        if ($directory -eq "$env:USERPROFILE\Downloads") {
+            $newDirectoryNode.SetAttribute("whodata", "yes")
+            $newDirectoryNode.SetAttribute("realtime", "yes")
+        }
+        
         $newDirectoryNode.InnerText = $directory
         $syscheckNode.InsertAfter($newDirectoryNode, $commentNode) | Out-Null
     }
@@ -428,6 +381,52 @@ if ($commentNode) {
     $fragment.InnerXml = $newDirectory
     $syscheckNode.AppendChild($fragment) | Out-Null
 }
+
+# ====================================================================================
+# --- FIX #1: OPTIMIZE SYSCHECK CPU/IO PERFORMANCE (WINDOWS) ---
+# ====================================================================================
+Write-Host "Optimizing Syscheck (FIM) performance to prevent high CPU/IO usage..."
+if ($syscheckNode) {
+    # Add max_eps (Limit events per second to prevent CPU spikes)
+    if (-not $syscheckNode.max_eps) {
+        $maxEpsNode = $ossecConf.CreateElement("max_eps")
+        $maxEpsNode.InnerText = "50"
+        $syscheckNode.AppendChild($maxEpsNode) | Out-Null
+    }
+    # Add frequency (Run baseline scan every 12 hours instead of constantly)
+    if (-not $syscheckNode.frequency) {
+        $freqNode = $ossecConf.CreateElement("frequency")
+        $freqNode.InnerText = "43200"
+        $syscheckNode.AppendChild($freqNode) | Out-Null
+    }
+    # Add process_priority (Lower process priority so user apps get CPU first)
+    if (-not $syscheckNode.process_priority) {
+        $priorityNode = $ossecConf.CreateElement("process_priority")
+        $priorityNode.InnerText = "10"
+        $syscheckNode.AppendChild($priorityNode) | Out-Null
+    }
+    # Add sleep (Sleep for 20ms between reading files to save Disk I/O)
+    if (-not $syscheckNode.sleep) {
+        $sleepNode = $ossecConf.CreateElement("sleep")
+        $sleepNode.InnerText = "20"
+        $syscheckNode.AppendChild($sleepNode) | Out-Null
+    }
+    # Add nodiff for system directories to prevent memory spikes on large binaries
+    $nodiffPaths = @(
+        "$env:WINDIR\System32",
+        "$env:ProgramFiles",
+        "$env:ProgramFiles(x86)"
+    )
+    foreach ($nodiffPath in $nodiffPaths) {
+        $existingNodiff = $syscheckNode.nodiff | Where-Object { $_ -eq $nodiffPath }
+        if (-not $existingNodiff) {
+            $nodiffNode = $ossecConf.CreateElement("nodiff")
+            $nodiffNode.InnerText = $nodiffPath
+            $syscheckNode.AppendChild($nodiffNode) | Out-Null
+        }
+    }
+}
+# ====================================================================================
 
 $ossecConf.Save($configPath)
 Write-Host "Directory monitoring configuration added successfully."
@@ -449,41 +448,44 @@ Start-Process -FilePath $pythonInstallerPath -ArgumentList "/quiet InstallAllUse
 # Start a new PowerShell session to install PyInstaller
 py -m pip install pyinstaller
 
-# Define the URL of the remove-threat.py script
-$removeThreatUrl = "https://github.com/thenexlabs/nixguard-agent-setup/raw/main/windows/remove-threat.py"
-
-# Define the path to save the remove-threat.py script
-$removeThreatPath = Join-Path -Path $env:TEMP -ChildPath "remove-threat.py"
-
-# Download the remove-threat.py script
-Invoke-WebRequest -Uri $removeThreatUrl -OutFile $removeThreatPath
-
-# Change the current location to the directory containing remove-threat.py
-Set-Location -Path $env:TEMP
-
-# Convert the remove-threat.py script to a Windows executable
-Invoke-Expression -Command "py -m PyInstaller -F $removeThreatPath"
-
-# Define the path of the executable file
-$exePath = Join-Path -Path $env:TEMP -ChildPath "dist\remove-threat.exe"
-
 # Define the destination directory
 $destDir = "C:\Program Files (x86)\ossec-agent\active-response\bin"
 
-# Move the executable file to the destination directory
+# 1. Download and Compile the remove-threat.py script
+$removeThreatUrl = "https://github.com/thenexlabs/nixguard-agent-setup/raw/main/windows/remove-threat.py"
+$removeThreatPath = Join-Path -Path $env:TEMP -ChildPath "remove-threat.py"
+Invoke-WebRequest -Uri $removeThreatUrl -OutFile $removeThreatPath
+
+Set-Location -Path $env:TEMP
+Invoke-Expression -Command "py -m PyInstaller -F $removeThreatPath"
+
+$exePath = Join-Path -Path $env:TEMP -ChildPath "dist\remove-threat.exe"
 Move-Item -Path $exePath -Destination $destDir
 
-# Define the paths of the spec file and the dist and build directories
 $specPath = Join-Path -Path $env:TEMP -ChildPath "remove-threat.spec"
+Remove-Item -Path $specPath -ErrorAction SilentlyContinue
+
+# --- FIX #2: Download and Compile the nixguard-remediate.py Active Response Script ---
+Write-Host "Downloading and compiling NixGuard Active Response remediation script..."
+$remediateUrl = "https://github.com/thenexlabs/nixguard-agent-setup/raw/main/windows/nixguard-remediate.py"
+$remediatePath = Join-Path -Path $env:TEMP -ChildPath "nixguard-remediate.py"
+Invoke-WebRequest -Uri $remediateUrl -OutFile $remediatePath
+
+Invoke-Expression -Command "py -m PyInstaller -F $remediatePath"
+
+$remediateExePath = Join-Path -Path $env:TEMP -ChildPath "dist\nixguard-remediate.exe"
+Move-Item -Path $remediateExePath -Destination $destDir
+
+$remediateSpecPath = Join-Path -Path $env:TEMP -ChildPath "nixguard-remediate.spec"
+Remove-Item -Path $remediateSpecPath -ErrorAction SilentlyContinue
+
+# Clean up PyInstaller build directories
 $distDir = Join-Path -Path $env:TEMP -ChildPath "dist"
 $buildDir = Join-Path -Path $env:TEMP -ChildPath "build"
-
-# Delete the spec file and the dist and build directories
-Remove-Item -Path $specPath -ErrorAction SilentlyContinue
 Remove-Item -Path $distDir -Recurse -ErrorAction SilentlyContinue
 Remove-Item -Path $buildDir -Recurse -ErrorAction SilentlyContinue
 
-Write-Host "Virus threat response configuration added successfully."
+Write-Host "Virus threat response and remediation configurations added successfully."
 
 ###########################################################################################
 
