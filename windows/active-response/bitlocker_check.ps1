@@ -1,11 +1,10 @@
 # bitlocker_check.ps1
 # A hardened script that checks BitLocker status and ensures a compliant or non-compliant state is always reported.
-# The final output path and JSON structure are immutable to match the Wazuh parser.
+# Outputs flat JSON lines to ensure 100% compatibility with the Wazuh JSON decoder.
 
 # --- Section 1: Pre-flight Checks & Environment Setup ---
 
 $logDir = "C:\ProgramData\Wazuh\logs"
-# Ensure the log directory exists. This is a fatal-on-failure check.
 try {
     if (-not (Test-Path -Path $logDir)) {
         New-Item -Path $logDir -ItemType Directory -Force -ErrorAction Stop | Out-Null
@@ -24,59 +23,67 @@ $output = try {
         throw "BitLocker PowerShell module is not available on this system."
     }
 
-    # Use the most compatible method to get all BitLocker-managed fixed drives.
     $bitlockerVolumes = Get-BitLockerVolume -ErrorAction SilentlyContinue | Where-Object { $_.VolumeType -eq 'Fixed' }
 
     if ($null -eq $bitlockerVolumes) {
-        #
-        # --- THIS IS THE CRITICAL FIX ---
-        # A machine with no BitLocker volumes IS a security failure.
-        # We will now create a failure report that the existing Wazuh rules WILL catch.
-        #
+        # No volumes found is a security failure. Report C: as decrypted.
         $systemDrive = (Get-CimInstance -ClassName Win32_OperatingSystem).SystemDrive
         $failure_report = @{
-            "mount_point"       = $systemDrive;
-            "protection_status" = "Off"; # This will trigger rule 100102
-            "volume_status"     = "FullyDecrypted"; # This will trigger rule 100103
-            "encryption_method" = "None";
-            "key_protectors"    = ""
-        }
-        # The script's state is "success" because it successfully discovered a non-compliant state.
-        @{ "bitlocker_status" = @{ "state" = "success"; "volumes" = @($failure_report) } }
-    }
-    else {
-        # If volumes were found, process them normally.
-        $volume_reports = foreach ($volume in $bitlockerVolumes) {
-            @{
-                "mount_point"       = $volume.MountPoint;
-                "protection_status" = $volume.ProtectionStatus.ToString();
-                "volume_status"     = $volume.VolumeStatus.ToString();
-                "encryption_method" = $volume.EncryptionMethod.ToString();
-                "key_protectors"    = ($volume.KeyProtector | ForEach-Object { $_.KeyProtectorType.ToString() }) -join ','
+            "bitlocker_status" = @{
+                "state"             = "success"
+                "mount_point"       = $systemDrive
+                "protection_status" = "Off"
+                "volume_status"     = "FullyDecrypted"
+                "encryption_method" = "None"
+                "key_protectors"    = ""
             }
         }
-        # Build the success object with the exact required schema.
-        @{ "bitlocker_status" = @{ "state" = "success"; "volumes" = $volume_reports } }
+        @($failure_report)
+    }
+    else {
+        # Process each volume as a separate flat object
+        foreach ($volume in $bitlockerVolumes) {
+            @{
+                "bitlocker_status" = @{
+                    "state"             = "success"
+                    "mount_point"       = $volume.MountPoint
+                    "protection_status" = $volume.ProtectionStatus.ToString()
+                    "volume_status"     = $volume.VolumeStatus.ToString()
+                    "encryption_method" = $volume.EncryptionMethod.ToString()
+                    "key_protectors"    = ($volume.KeyProtector | ForEach-Object { $_.KeyProtectorType.ToString() }) -join ','
+                }
+            }
+        }
     }
 }
 catch {
-    # This block handles SCRIPT EXECUTION errors, not compliance states.
-    @{ "bitlocker_status" = @{ "state" = "error"; "message" = "Script failed during execution. Error: $($_.Exception.Message)" } }
+    # Handle script execution errors
+    $err_report = @{
+        "bitlocker_status" = @{
+            "state"   = "error"
+            "message" = "Script failed during execution. Error: $($_.Exception.Message)"
+        }
+    }
+    @($err_report)
 }
 
 
 # --- Section 3: The Atomic Write Transaction ---
-# This safely writes the $output variable to the immutable log file path.
 
 $finalLogFile = Join-Path -Path $logDir -ChildPath "bitlocker_status.log"
 $tempLogFile = Join-Path -Path $logDir -ChildPath "bitlocker_status.tmp"
 
 try {
-    $finalJson = $output | ConvertTo-Json -Compress -Depth 5
-    $finalJson | Out-File -FilePath $tempLogFile -Encoding utf8 -NoNewline
+    # Convert each volume report to a single-line compressed JSON and join them with newlines
+    $jsonLines = foreach ($report in $output) {
+        $report | ConvertTo-Json -Compress -Depth 5
+    }
+    $finalContent = $jsonLines -join "`r`n"
+    
+    $finalContent | Out-File -FilePath $tempLogFile -Encoding utf8 -NoNewline
     Move-Item -Path $tempLogFile -Destination $finalLogFile -Force
 }
 catch {
-    Write-Error "FATAL: FAILED to write the final log file at '$finalLogFile'. Check disk space or AV logs. Error: $($_.Exception.Message)"
+    Write-Error "FATAL: FAILED to write the final log file at '$finalLogFile'. Error: $($_.Exception.Message)"
     exit 1
 }
