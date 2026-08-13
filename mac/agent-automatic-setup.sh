@@ -156,8 +156,9 @@ optimize_syscheck_performance() {
     local ossecConfPath="/Library/Ossec/etc/ossec.conf"
     
     # Use perl for robust, cross-platform in-place XML manipulation (bypasses macOS sed quirks)
-    perl -i -pe 's|<syscheck>|<syscheck>\n    <max_eps>50</max_eps>\n    <frequency>43200</frequency>\n    <process_priority>10</process_priority>\n    <sleep>20</sleep>|g' "$ossecConfPath"
+    perl -i -pe 's|<syscheck>|<syscheck>\n    <max_eps>50</max_eps>\n    <frequency>43200</frequency>\n    <process_priority>10</process_priority>\n    <sleep>20</sleep>\n    <scan_on_start>no</scan_on_start>|g' "$ossecConfPath"
     perl -i -pe 's|</syscheck>|    <nodiff>/bin</nodiff>\n    <nodiff>/sbin</nodiff>\n    <nodiff>/usr/bin</nodiff>\n    <nodiff>/usr/sbin</nodiff>\n  </syscheck>|g' "$ossecConfPath"
+    perl -i -pe 's|</syscheck>|    <ignore type="sregex">node_modules</ignore>\n    <ignore type="sregex">\\.git</ignore>\n    <ignore type="sregex">Library/Caches</ignore>\n    <ignore type="sregex">/private/var/folders</ignore>\n  </syscheck>|g' "$ossecConfPath"
     
     echo "Syscheck performance optimized."
 }
