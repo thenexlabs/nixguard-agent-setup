@@ -425,6 +425,30 @@ if ($syscheckNode) {
             $syscheckNode.AppendChild($nodiffNode) | Out-Null
         }
     }
+
+    # Add scan_on_start (Prevent 100% CPU brute-force scanning on startup/wake)
+    if (-not $syscheckNode.scan_on_start) {
+        $scanOnStartNode = $ossecConf.CreateElement("scan_on_start")
+        $scanOnStartNode.InnerText = "no"
+        $syscheckNode.AppendChild($scanOnStartNode) | Out-Null
+    }
+
+    # Add ignore directories for heavy developer environments
+    $ignorePaths = @(
+        "node_modules",
+        "\.git",
+        "C:\\ProgramData\\Docker",
+        "C:\\ProgramData\\containerd"
+    )
+    foreach ($ignorePath in $ignorePaths) {
+        $existingIgnore = $syscheckNode.ignore | Where-Object { $_.'#text' -eq $ignorePath }
+        if (-not $existingIgnore) {
+            $ignoreNode = $ossecConf.CreateElement("ignore")
+            $ignoreNode.SetAttribute("type", "sregex")
+            $ignoreNode.InnerText = $ignorePath
+            $syscheckNode.AppendChild($ignoreNode) | Out-Null
+        }
+    }
 }
 # ====================================================================================
 
