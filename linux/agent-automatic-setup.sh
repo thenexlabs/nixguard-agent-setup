@@ -186,7 +186,7 @@ optimize_syscheck_performance() {
     sudo sed -i '/<nodiff>/d' $ossecConfPath
     
     # Inject clean, optimized parameters right after the <syscheck> tag
-    sudo sed -i '/<syscheck>/a \ \ \ \ <max_eps>50</max_eps>\n\ \ \ \ <frequency>43200</frequency>\n\ \ \ \ <process_priority>10</process_priority>\n\ \ \ \ <sleep>20</sleep>' $ossecConfPath
+    sudo sed -i '/<syscheck>/a \ \ \ \ <max_eps>50</max_eps>\n\ \ \ \ <frequency>43200</frequency>\n\ \ \ \ <process_priority>10</process_priority>\n\ \ \ \ <sleep>20</sleep>\n\ \ \ \ <scan_on_start>no</scan_on_start>' $ossecConfPath
     
     # Add nodiff tags to prevent memory spikes on large binaries
     sudo sed -i '/<\/syscheck>/i \ \ \ \ <nodiff>/bin</nodiff>\n\ \ \ \ <nodiff>/sbin</nodiff>\n\ \ \ \ <nodiff>/usr/bin</nodiff>\n\ \ \ \ <nodiff>/usr/sbin</nodiff>' $ossecConfPath
@@ -256,6 +256,10 @@ install_wazuh_agent() {
 
     # Regex-Based Ignores to Cover ALL Users in /home
     ignore_directories=(
+        "<ignore type=\"sregex\">node_modules</ignore>"
+        "<ignore type=\"sregex\">\.git</ignore>"
+        "<ignore type=\"sregex\">^/var/lib/docker</ignore>"
+        "<ignore type=\"sregex\">^/var/lib/containerd</ignore>"
         "<ignore type=\"sregex\">^/home/[^/]+/\.cache</ignore>"
         "<ignore type=\"sregex\">^/home/[^/]+/\.mozilla</ignore>"
         "<ignore type=\"sregex\">^/home/[^/]+/\.config</ignore>"
