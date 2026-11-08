@@ -38,13 +38,22 @@ if [ "$ACTION" = "nixguard-block-ip" ] || [[ "$TARGET" =~ ^[0-9]{1,3}\.[0-9]{1,3
     log_msg "Action: Blocking IP $TARGET in firewall."
     
     if command -v iptables >/dev/null 2>&1; then
-        # Check if rule already exists to prevent duplicates
-        if ! iptables -C INPUT -s "$TARGET" -j DROP >/dev/null 2>&1; then
-            iptables -I INPUT -s "$TARGET" -j DROP
-            iptables -I FORWARD -s "$TARGET" -j DROP
-            log_msg "Successfully blocked IP $TARGET via iptables."
+        # NixGuard's own rule carries a comment, so it differs from the plain "-s IP -j DROP" rule that Wazuh's
+        # timed firewall-drop adds and later deletes. Without it, a block found "already in place" vanished
+        # when firewall-drop's timeout expired.
+        MARK="nixguard-block"
+        if ! iptables -C INPUT -s "$TARGET" -m comment --comment "$MARK" -j DROP >/dev/null 2>&1; then
+            if iptables -I INPUT -s "$TARGET" -m comment --comment "$MARK" -j DROP 2>/dev/null; then
+                iptables -I FORWARD -s "$TARGET" -m comment --comment "$MARK" -j DROP 2>/dev/null
+                log_msg "Successfully blocked IP $TARGET via iptables (rule tagged $MARK)."
+            else
+                # No comment module: fall back to a plain rule.
+                iptables -I INPUT -s "$TARGET" -j DROP
+                iptables -I FORWARD -s "$TARGET" -j DROP
+                log_msg "Successfully blocked IP $TARGET via iptables (untagged: comment module unavailable)."
+            fi
         else
-            log_msg "Notice: IP $TARGET is already blocked in iptables."
+            log_msg "Notice: IP $TARGET is already blocked by NixGuard in iptables."
         fi
     elif command -v firewall-cmd >/dev/null 2>&1; then
         firewall-cmd --permanent --add-rich-rule="rule family='ipv4' source address='$TARGET' reject" >/dev/null 2>&1
