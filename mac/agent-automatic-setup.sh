@@ -5,7 +5,7 @@
 # an intelligent, compliance-driven feature installation based on user preferences.
 #
 # Usage (as a single command):
-# curl -sS https://.../agent-automatic-setup.sh | sudo bash -s -- <MANAGER_IP> <AGENT_NAME> <API_KEY>
+# curl -sS https://.../agent-automatic-setup.sh | sudo bash -s -- <MANAGER_IP> <AGENT_NAME> [--requires-encryption]
 #
 
 # Exit immediately if any command fails for robust error handling.
@@ -14,15 +14,31 @@ set -e
 set -E
 
 # --- 1. Validate Input & Define Variables ---
-if [ "$#" -ne 3 ]; then
+# Optional flags set by the NixGuard app from the account's compliance standards:
+#   --requires-encryption  install the disk-encryption status check
+#   --soc2                 install the NixGuard SOC 2 SCA policy locally on this endpoint
+# A third positional argument (the API key older install commands passed) is accepted and ignored.
+REQUIRES_ENCRYPTION=false
+SOC2=false
+POSITIONAL=()
+for arg in "$@"; do
+    case "$arg" in
+        --requires-encryption) REQUIRES_ENCRYPTION=true ;;
+        --soc2) SOC2=true ;;
+        --*) echo "Unknown option: $arg" >&2; exit 1 ;;
+        *) POSITIONAL+=("$arg") ;;
+    esac
+done
+set -- "${POSITIONAL[@]}"
+
+if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
     echo "Error: Invalid number of arguments." >&2
-    echo "Usage: sudo bash -s -- <MANAGER_IP> <AGENT_NAME> <API_KEY>" >&2
+    echo "Usage: sudo bash -s -- <MANAGER_IP> <AGENT_NAME> [--requires-encryption]" >&2
     exit 1
 fi
 
 MANAGER_IP=$1
-AGENT_NAME_BASE=$2 # Store the base name
-API_KEY=$3
+AGENT_NAME=$2
 GROUP_LABEL="default"
 
 # URLs
@@ -36,49 +52,9 @@ AR_SCRIPT_URL="${REPO_BASE_URL}/active-response/remove-threat.sh"
 REMEDIATE_SCRIPT_URL="${REPO_BASE_URL}/active-response/nixguard-remediate.sh"
 FILEVAULT_SCRIPT_URL="${REPO_BASE_URL}/active-response/filevault_check.sh"
 
-GET_USER_API_URL="https://api.thenex.world/get-user"
 FIM_CONF_URL="${REPO_BASE_URL}/config/fim.conf"
 FILEVAULT_CONF_URL="${REPO_BASE_URL}/config/filevault.conf"
 
-
-# --- 2. Dependency Management ---
-check_dependencies() {
-    echo "--- Checking for required dependencies (jq) ---"
-    if ! command -v jq &> /dev/null; then
-        echo "jq is not installed. Attempting to install with Homebrew..."
-        if ! command -v brew &> /dev/null; then
-            echo "Warning: Homebrew not found. Cannot install jq." >&2
-            return 1
-        fi
-        brew install jq
-    fi
-    echo "jq is available."
-    return 0
-}
-
-# --- 3. Fetch User Compliance Preferences ---
-fetch_user_preferences() {
-    echo "--- Fetching user compliance preferences ---" >&2
-    
-    local user_api_key="$1"
-    local api_payload
-    api_payload=$(printf '{"apiKey":"%s"}' "$user_api_key")
-    local response
-    response=$(curl --request POST --header "Content-Type: application/json" --silent --show-error --data "$api_payload" "$GET_USER_API_URL")
-
-    if [ -z "$response" ] || ! echo "$response" | jq -e '.token' > /dev/null 2>&1; then
-        echo "Warning: Could not retrieve a valid token from the user API." >&2
-        echo "[]"
-        return
-    fi
-    
-    local jwt_payload
-    jwt_payload=$(echo "$response" | jq -r '.token | split(".")[1] | @base64d | fromjson')
-    local standards
-    standards=$(echo "$jwt_payload" | jq -r '.cybersecurityPreferences.complianceStandards')
-    
-    echo "$standards"
-}
 
 # --- 4. Uninstall Existing Agent (for Idempotency) ---
 uninstall_wazuh_agent() {
@@ -145,7 +121,7 @@ configure_ossec_conf() {
     echo "Configuration file found and is not empty."
 
     echo "Applying File Integrity Monitoring (FIM) rules by downloading config..."
-    curl -sS "$FIM_CONF_URL" >> "$ossecConfPath"
+    curl -fsS "$FIM_CONF_URL" >> "$ossecConfPath" || echo "Warning: FIM config not available; keeping the default." >&2
     
     echo "Custom FIM configuration applied successfully."
 }
@@ -217,7 +193,9 @@ install_filevault_monitoring() {
     launchctl load "$plistPath"
     
     echo "Configuring agent to monitor FileVault status log by downloading config..."
-    curl -sS "$FILEVAULT_CONF_URL" >> "$ossecConfPath"
+    if ! grep -q "filevault_status.log" "$ossecConfPath"; then
+        printf '%s\n' '<ossec_config>' '  <localfile>' '    <location>/Library/Ossec/logs/filevault_status.log</location>' '    <log_format>json</log_format>' '  </localfile>' '</ossec_config>' >> "$ossecConfPath"
+    fi
 
     echo "FileVault monitoring script installed and scheduled."
 }
@@ -254,29 +232,11 @@ install_ar_script
 
 # --- Intelligent Feature Deployment ---
 
-# 1. Start with the default state: encryption is NOT required.
-ENCRYPTION_REQUIRED=false
-
-# 2. Check for reasons to enable it.
-if ! check_dependencies; then
-    echo "Warning: jq dependency not met. Defaulting to encryption monitoring enabled." >&2
-    ENCRYPTION_REQUIRED=true
-else
-    COMPLIANCE_STANDARDS=$(fetch_user_preferences "$API_KEY")
-    
-    echo "--- Compliance Standards from API ---" >&2
-    echo "$COMPLIANCE_STANDARDS" >&2
-    echo "-------------------------------------" >&2
-
-    REQUIRED_STANDARDS=("soc2" "nist_sp_800_53" "iso27001" "gdpr" "hipaa" "pci_dss" "pipeda" "cis_controls")
-    
-    for standard in "${REQUIRED_STANDARDS[@]}"; do
-        if echo "$COMPLIANCE_STANDARDS" | jq -e --arg s "$standard" '. | index($s)' > /dev/null 2>&1; then
-            echo "Compliance standard '$standard' found, enabling encryption monitoring." >&2
-            ENCRYPTION_REQUIRED=true
-            break
-        fi
-    done
+# The NixGuard app passes --requires-encryption when the account's compliance standards require it,
+# so the installer never needs an account token.
+ENCRYPTION_REQUIRED=$REQUIRES_ENCRYPTION
+if [ "$SOC2" = true ]; then
+    echo "No SOC 2 policy for macOS yet; skipping." >&2
 fi
 
 # 3. Make the final decision.

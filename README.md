@@ -8,14 +8,14 @@ This repository holds the endpoint onboarding scripts for [NixGuard](https://nix
 
 Each setup script installs the official [Wazuh](https://wazuh.com) agent, points it at your NixGuard manager, applies a tuned file integrity monitoring (FIM) profile, and deploys NixGuard active-response scripts used for threat remediation. Matching removal scripts uninstall the agent cleanly.
 
-For the variant that enrolls agents into a group label instead of using an API key, see [nixguard-free-agent-setup](https://github.com/thenexlabs/nixguard-free-agent-setup).
+For the variant that enrolls agents into a group label on a shared manager, see [nixguard-free-agent-setup](https://github.com/thenexlabs/nixguard-free-agent-setup).
 
 ## Features
 
 - **Cross-platform endpoint security agent**: Linux (Debian, Ubuntu, Kali, CentOS, RHEL, Fedora), macOS (Intel and Apple silicon) and Windows.
 - **Clean reinstall**: any existing Wazuh agent is stopped and removed before the new one is installed, so the scripts can be re-run safely.
 - **Tuned file integrity monitoring**: rate-limited, low-priority syscheck scans (12-hour baseline, no scan on start) with noisy paths such as `node_modules`, `.git` and container storage ignored to keep CPU and disk I/O low.
-- **Compliance-driven encryption monitoring**: the script reads your account's compliance preferences from the NixGuard API. If they include SOC 2, NIST SP 800-53, ISO 27001, GDPR, HIPAA, PCI DSS, PIPEDA or CIS Controls, it installs a disk-encryption check (LUKS on Linux, FileVault on macOS, BitLocker on Windows) whose JSON output the agent forwards for compliance reporting.
+- **Compliance-driven encryption monitoring**: the NixGuard app adds `--requires-encryption` (Windows: `-requiresEncryption`) to the install command when your compliance standards include SOC 2, NIST SP 800-53, ISO 27001, GDPR, HIPAA, PCI DSS, PIPEDA or CIS Controls, and the script then installs a disk-encryption check (LUKS on Linux, FileVault on macOS, BitLocker on Windows) whose JSON output the agent forwards for compliance reporting. With `--soc2` (`-soc2`) it also installs the NixGuard SOC 2 SCA policy (`sca/`) locally on Linux and Windows.
 - **Active response for threat detection and remediation**: installs `remove-threat` (quarantine or delete a flagged file) and `nixguard-remediate` (block an IP, restart a service, or upgrade a package) so NixGuard can act on alerts.
 - **Linux audit support**: installs and enables `auditd`.
 
@@ -29,7 +29,7 @@ For the variant that enrolls agents into a group label instead of using an API k
 
 You also need:
 
-- The **address of your NixGuard manager**, an **agent name** for this machine, and your **NixGuard API key**.
+- The **address of your NixGuard manager**, and an **agent name** for this machine. No API key is needed (older commands that pass one still work; it is ignored).
 - Outbound network access from the endpoint (see [What the scripts change](#what-the-scripts-change)).
 
 ## Quick start / Installation
@@ -40,21 +40,21 @@ Download the script for your platform, review it, then run it with administrator
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/thenexlabs/nixguard-agent-setup/main/linux/agent-automatic-setup.sh
-sudo bash agent-automatic-setup.sh <manager_address> <agent_name> <api_key>
+sudo bash agent-automatic-setup.sh <manager_address> <agent_name> [--requires-encryption] [--soc2]
 ```
 
 ### macOS
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/thenexlabs/nixguard-agent-setup/main/mac/agent-automatic-setup.sh
-sudo bash agent-automatic-setup.sh <manager_address> <agent_name> <api_key>
+sudo bash agent-automatic-setup.sh <manager_address> <agent_name> [--requires-encryption]
 ```
 
 ### Windows (PowerShell as Administrator)
 
 ```powershell
 Invoke-WebRequest -Uri https://raw.githubusercontent.com/thenexlabs/nixguard-agent-setup/main/windows/agent-automatic-setup.ps1 -OutFile agent-automatic-setup.ps1
-powershell -ExecutionPolicy Bypass -File .\agent-automatic-setup.ps1 -agentName <agent_name> -ipAddress <manager_address> -apiKey <api_key>
+powershell -ExecutionPolicy Bypass -File .\agent-automatic-setup.ps1 -agentName <agent_name> -ipAddress <manager_address> [-requiresEncryption] [-soc2]
 ```
 
 Note the argument order differs on Windows: agent name comes first.
@@ -87,7 +87,7 @@ Run from a clone of this repository (`git clone https://github.com/thenexlabs/ni
 | Active response | `remove-threat.sh`, `nixguard-remediate.sh` | `remove-threat.sh`, `nixguard-remediate.sh` | `remove-threat.exe`, `nixguard-remediate.exe` |
 | Config | Rewrites the `<syscheck>` block in `ossec.conf` (backup saved alongside) | Appends FIM tuning to `ossec.conf` | Adds FIM directories and tuning to `ossec.conf` |
 
-**Network:** the agent connects outbound to your NixGuard manager using the standard Wazuh agent ports (1514/TCP for events, 1515/TCP for enrollment; the scripts do not change them). During setup the scripts also make HTTPS requests to `packages.wazuh.com`, `raw.githubusercontent.com` (this repository), the NixGuard API (to read your compliance preferences), and on Windows `python.org` and PyPI. No inbound ports are opened.
+**Network:** the agent connects outbound to your NixGuard manager using the standard Wazuh agent ports (1514/TCP for events, 1515/TCP for enrollment; the scripts do not change them). During setup the scripts also make HTTPS requests to `packages.wazuh.com`, `raw.githubusercontent.com` (this repository) and on Windows `python.org` and PyPI. No inbound ports are opened.
 
 **Warning:** setup removes any existing Wazuh agent on the machine first. On macOS the whole `/Library/Ossec` directory is deleted.
 

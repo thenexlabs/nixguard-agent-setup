@@ -1,18 +1,33 @@
 #!/bin/bash
-# Usage: sudo ./agent-automatic-setup.sh <manager_ip> <agent_name> <api_key>
+# Usage: sudo ./agent-automatic-setup.sh <manager_ip> <agent_name> [--requires-encryption] [--soc2]
 
 set -e
 
-# Check if three arguments are passed
-if [ "$#" -ne 3 ]; then
+# Optional flags set by the NixGuard app from the account's compliance standards:
+#   --requires-encryption  install the disk-encryption status check
+#   --soc2                 install the NixGuard SOC 2 SCA policy locally on this endpoint
+# A third positional argument (the API key older install commands passed) is accepted and ignored.
+REQUIRES_ENCRYPTION=false
+SOC2=false
+POSITIONAL=()
+for arg in "$@"; do
+    case "$arg" in
+        --requires-encryption) REQUIRES_ENCRYPTION=true ;;
+        --soc2) SOC2=true ;;
+        --*) echo "Unknown option: $arg" >&2; exit 1 ;;
+        *) POSITIONAL+=("$arg") ;;
+    esac
+done
+set -- "${POSITIONAL[@]}"
+
+if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
     echo "Error: Invalid number of arguments." >&2
-    echo "Usage: sudo $0 <manager_ip> <agent_name> <api_key>" >&2
+    echo "Usage: sudo $0 <manager_ip> <agent_name> [--requires-encryption] [--soc2]" >&2
     exit 1
 fi
 
 MANAGER_IP="$1"
 AGENT_NAME="$2"
-API_KEY="$3"
 
 detect_distro_arch() {
     if [ -f /etc/os-release ]; then
@@ -44,40 +59,6 @@ install_bootstrap_dependencies() {
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl jq wget auditd audispd-plugins
     elif [ "$distro" = "centos" ] || [ "$distro" = "rhel" ] || [ "$distro" = "fedora" ]; then
         sudo yum install -y -q curl jq wget audit
-    fi
-}
-
-decode_jwt_payload() {
-    local token="$1"
-    local payload
-    payload=$(echo "$token" | cut -d'.' -f2)
-    
-    local len=${#payload}
-    local pad=$(( (4 - len % 4) % 4 ))
-    if [ $pad -eq 1 ]; then payload="${payload}="
-    elif [ $pad -eq 2 ]; then payload="${payload}=="
-    elif [ $pad -eq 3 ]; then payload="${payload}==="
-    fi
-    
-    echo "$payload" | tr '_-' '/+' | base64 -d 2>/dev/null || true
-}
-
-fetch_compliance_standards() {
-    local key="$1"
-    local api_url="https://api.thenex.world/get-user"
-    local api_payload
-    api_payload=$(printf '{"apiKey":"%s"}' "$key")
-    
-    local response
-    response=$(curl -s -X POST -H "Content-Type: application/json" -d "$api_payload" "$api_url" || true)
-    
-    local token
-    token=$(echo "$response" | jq -r '.token // empty' 2>/dev/null || true)
-    
-    if [ -n "$token" ]; then
-        local decoded
-        decoded=$(decode_jwt_payload "$token")
-        echo "$decoded" | jq -r '.cybersecurityPreferences.complianceStandards[]? // empty' 2>/dev/null || true
     fi
 }
 
@@ -197,17 +178,8 @@ install_wazuh_agent() {
     configure_syscheck_and_enrollment
 
     # STEP 2: COMPLIANCE ENCRYPTION SCRIPT (LUKS)
-    local requires_encryption=false
-    local standards
-    standards=$(fetch_compliance_standards "$API_KEY")
-    
-    for std in $standards; do
-        if [[ "$std" =~ ^(soc2|nist_sp_800_53|iso27001|gdpr|hipaa|pci_dss|pipeda|cis_controls)$ ]]; then
-            requires_encryption=true
-            break
-        fi
-    done
-
+    # The NixGuard app passes --requires-encryption when the account's compliance standards require it.
+    local requires_encryption=$REQUIRES_ENCRYPTION
     local conf="/var/ossec/etc/ossec.conf"
     if [ "$requires_encryption" = true ]; then
         echo "Compliance standards require endpoint encryption tracking. Installing LUKS monitor..."
@@ -223,6 +195,17 @@ install_wazuh_agent() {
             if ! sudo grep -q "/var/log/luks_status.log" "$conf"; then
                 sudo sed -i "/<\/ossec_config>/i \\\t<localfile>\\n\\t\\t<location>/var/log/luks_status.log</location>\\n\\t\\t<log_format>json</log_format>\\n\\t</localfile>" "$conf"
             fi
+        fi
+    fi
+
+    # SOC 2: local policy, so it checks this endpoint only.
+    if [ "$SOC2" = true ]; then
+        if sudo wget -q -O /var/ossec/ruleset/sca/sca_soc2_linux.yml "https://raw.githubusercontent.com/thenexlabs/nixguard-agent-setup/main/sca/sca_soc2_linux.yml"; then
+            sudo chown root:wazuh /var/ossec/ruleset/sca/sca_soc2_linux.yml
+            sudo chmod 640 /var/ossec/ruleset/sca/sca_soc2_linux.yml
+            echo "Installed the NixGuard SOC 2 policy."
+        else
+            echo "WARNING: could not download the SOC 2 policy." >&2
         fi
     fi
 

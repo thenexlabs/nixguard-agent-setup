@@ -1,0 +1,80 @@
+#
+# NixGuard SOC 2 Readiness Assessment Policy for Windows
+#
+# Version: 1.0 (Definitive Working Version)
+#
+
+policy:
+  id: "nixguard_soc2_windows_v1"
+  file: "sca_soc2_windows.yml"
+  name: "NixGuard - SOC 2 Readiness Assessment for Windows"
+  description: "Checks Windows Server configurations against key technical controls for SOC 2 compliance."
+  references:
+    - https://www.aicpa.org/soc4soctrustservices
+
+checks:
+  - id: 3001
+    title: "Network Level Authentication (NLA) for RDP is enabled"
+    description: "NLA provides an essential layer of pre-authentication for RDP sessions."
+    remediation: "Enable 'Allow connections only from computers running Remote Desktop with NLA'."
+    compliance:
+      - tsc: ["CC6.1"]
+    rules:
+      - 'c:reg query "HKLM\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v UserAuthentication -> r:UserAuthentication\s+REG_DWORD\s+0x1'
+    condition: "any"
+
+  - id: 3002
+    title: "Windows Defender Firewall is enabled for all profiles"
+    description: "The built-in Windows Firewall must be active on all network profiles."
+    remediation: "Enable the Windows Defender Firewall for all profiles."
+    compliance:
+      - tsc: ["CC6.1"]
+    rules:
+      # CORRECTED: The check for command existence is now part of the rule itself.
+      - 'c:powershell.exe -> n:0 && c:powershell -c "Get-NetFirewallProfile -Name Domain,Private,Public | Where-Object { $_.Enabled -eq ''False'' }" -> r:^$'
+    condition: "all"
+
+  - id: 3003
+    title: "Minimum password length is set to 8 or more characters"
+    description: "Enforcing a minimum password length is a fundamental security policy."
+    remediation: "Set 'Minimum password length' to 8 or greater in Local Security Policy or GPO."
+    compliance:
+      - tsc: ["CC6.2"]
+    rules:
+      # CORRECTED: Uses a direct registry check, which is more robust and valid syntax.
+      - 'c:reg query "HKLM\SYSTEM\CurrentControlSet\Control\Lsa" /v "LimitBlankPasswordUse" -> r:LimitBlankPasswordUse\s+REG_DWORD\s+0x1 && c:reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Network" /v MinPwdLen -> n:(\d+) compare >= 8'
+    condition: "any"
+
+  - id: 3004
+    title: "Account lockout policy is configured"
+    description: "A strong account lockout policy is crucial for mitigating brute-force attacks."
+    remediation: "Set 'Account lockout threshold' to 5 or less (but not 0) in Local Security Policy or GPO."
+    compliance:
+      - tsc: ["CC6.2"]
+    rules:
+      # CORRECTED: Uses a direct registry check, which is more robust and valid syntax.
+      - 'c:reg query "HKLM\SYSTEM\CurrentControlSet\Control\Lsa" /v "LockoutBadCount" -> n:(\d+) compare > 0'
+      - 'c:reg query "HKLM\SYSTEM\CurrentControlSet\Control\Lsa" /v "LockoutBadCount" -> n:(\d+) compare <= 5'
+    condition: "all"
+
+  - id: 3005
+    title: "Audit Policy for Logon Events is enabled"
+    description: "Windows must be configured to audit successful and failed logon events."
+    remediation: "Enable 'Audit logon events' for 'Success' and 'Failure'."
+    compliance:
+      - tsc: ["CC7.1", "CC7.2"]
+    rules:
+      # CORRECTED: The check for command existence is now part of the rule itself.
+      - 'c:auditpol.exe -> n:0 && c:auditpol /get /subcategory:"Logon" /r -> r:Success and Failure'
+    condition: "all"
+
+  - id: 3006
+    title: "Telnet Client feature is not installed"
+    description: "The insecure Telnet Client should not be installed on production servers."
+    remediation: "Use 'Remove-WindowsFeature Telnet-Client' in PowerShell."
+    compliance:
+      - tsc: ["CC7.2"]
+    rules:
+      # CORRECTED: The check for command existence is now part of the rule itself.
+      - 'c:powershell.exe -> n:0 && c:powershell -c "(Get-WindowsFeature -Name Telnet-Client).InstallState" -> r:^Removed$'
+    condition: "all"

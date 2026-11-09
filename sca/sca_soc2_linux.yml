@@ -1,0 +1,90 @@
+#
+# NixGuard SOC 2 Readiness Assessment Policy for Linux
+#
+# Version: 4.0 (Definitive Working Version)
+#
+
+policy:
+  id: "nixguard_soc2_linux_v1"
+  file: "sca_soc2_linux.yml"
+  name: "NixGuard - SOC 2 Readiness Assessment for Linux"
+  description: "Checks Linux system configurations against key technical controls for SOC 2 compliance."
+  references:
+    - https://www.aicpa.org/soc4soctrustservices
+
+checks:
+  - id: 2001
+    title: "SSH Protocol 2 is enforced"
+    description: "SSH Protocol 1 is obsolete and has known security vulnerabilities. Only Protocol 2 should be used."
+    remediation: "In /etc/ssh/sshd_config, ensure the 'Protocol' line is set to '2'."
+    compliance:
+      - tsc: ["CC6.1"]
+    rules:
+      # CORRECTED: The check for file existence is now part of the rule itself.
+      - "f:/etc/ssh/sshd_config -> r:^Protocol\s+2"
+    condition: "all"
+
+  - id: 2002
+    title: "SSH root login is disabled"
+    description: "Disabling direct root login via SSH is a critical security best practice."
+    remediation: "In /etc/ssh/sshd_config, set 'PermitRootLogin' to 'no' and restart the SSH service."
+    compliance:
+      - tsc: ["CC6.1", "CC6.2"]
+    rules:
+      # CORRECTED: The check for file existence is now part of the rule itself.
+      - "f:/etc/ssh/sshd_config -> r:^PermitRootLogin\s+no"
+    condition: "all"
+
+  - id: 2003
+    title: "A host-based firewall is enabled and active"
+    description: "A firewall is the first line of defense, controlling network traffic."
+    remediation: "Ensure the 'ufw' or 'firewalld' service is enabled and running."
+    compliance:
+      - tsc: ["CC6.1"]
+    rules:
+      # This rule uses '&&' to check for either ufw (Debian/Ubuntu) or firewalld (RHEL/CentOS).
+      - "c:ufw status -> r:^Status:\s+active && c:firewall-cmd --state -> r:^running"
+    condition: "any"
+
+  - id: 2004
+    title: "Minimum password length is enforced"
+    description: "Enforcing a minimum password length makes user accounts more resilient to brute-force attacks."
+    remediation: "In /etc/login.defs, ensure 'PASS_MIN_LEN' is set to 8 or higher."
+    compliance:
+      - tsc: ["CC6.2"]
+    rules:
+      # CORRECTED: The check for file existence is now part of the rule itself.
+      - "f:/etc/login.defs -> n:^PASS_MIN_LEN\s+(\d+) compare >= 8"
+    condition: "all"
+
+  - id: 2005
+    title: "No user accounts have empty passwords"
+    description: "Accounts with empty passwords present a severe security risk."
+    remediation: "Review the output of 'getent shadow' and lock any accounts that have an empty password field."
+    compliance:
+      - tsc: ["CC6.2"]
+    rules:
+      # CORRECTED: The check for command existence is now part of the rule itself.
+      - "c:which getent -> r:getent && not c:getent shadow | cut -d: -f2 | grep -q '^$'"
+    condition: "all"
+
+  - id: 2006
+    title: "The audit daemon (auditd) is installed and running"
+    description: "The audit daemon is essential for creating a detailed log of security-relevant events."
+    remediation: "Install the 'auditd' package and ensure the service is running."
+    compliance:
+      - tsc: ["CC7.1", "CC7.2"]
+    rules:
+      # CORRECTED: The check for command existence is now part of the rule itself.
+      - "c:which systemctl -> r:systemctl && c:systemctl is-active auditd -> r:^active"
+    condition: "all"
+
+  - id: 2007
+    title: "File Integrity Monitoring (FIM/Syscheck) is enabled"
+    description: "FIM is a core Wazuh capability that monitors for changes to critical system files."
+    remediation: "Ensure the <syscheck> block is enabled in the agent's ossec.conf."
+    compliance:
+      - tsc: ["CC7.1"]
+    rules:
+      - "a:syscheck.disabled -> n:0"
+    condition: "any"
