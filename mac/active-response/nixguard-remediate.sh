@@ -29,12 +29,24 @@ fi
 
 log_msg "Target extracted: $TARGET | Action extracted: $ACTION"
 
+# Only two kinds of target are ever acted on: an IPv4 address (blocked), or a plain package or service name. This
+# also keeps anything but an address out of the pf rule text below, and a name never starts with "-" (an option).
+IPV4_RE='^((25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])$'
+NAME_RE='^[A-Za-z0-9][A-Za-z0-9_.@+-]{0,63}$'
+IS_IP=0
+if [[ "$TARGET" =~ $IPV4_RE ]]; then
+    IS_IP=1
+elif [ "$ACTION" = "nixguard-block-ip" ] || ! [[ "$TARGET" =~ $NAME_RE ]]; then
+    log_msg "Error: Refused target (not an IPv4 address or a plain package/service name). Exiting."
+    exit 1
+fi
+
 # ==========================================
 # REMEDIATION ROUTING
 # ==========================================
 
-# 1. IP Blocking (nixguard-block-ip or target is an IP address)
-if [ "$ACTION" = "nixguard-block-ip" ] || [[ "$TARGET" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+# 1. IP Blocking (the target is an IPv4 address)
+if [ "$IS_IP" = "1" ]; then
     log_msg "Action: Blocking IP $TARGET in macOS Packet Filter (pf)."
     
     if command -v pfctl >/dev/null 2>&1; then
