@@ -1,10 +1,16 @@
 #!/bin/bash
 # Wazuh Active Response script for general OS-level remediation on macOS.
 
-LOG_FILE="/Library/Ossec/logs/active-responses.log"
+LOG_FILE="${NIXGUARD_AR_LOG:-/Library/Ossec/logs/active-responses.log}"
 
 log_msg() {
     echo "$(date '+%Y/%m/%d %H:%M:%S') nixguard-remediate: $1" >> "$LOG_FILE"
+}
+
+# The block result NixGuard reads back, in the line shape Wazuh's ar_log_json decoder reads (see the Linux script).
+# Every value is a validated IPv4 address, a run id of [a-f0-9-] or a fixed reason word.
+emit_result() { # <success|failure> <reason>
+    echo "$(date '+%Y/%m/%d %H:%M:%S') active-response/bin/nixguard-remediate: {\"version\":1,\"command\":\"add\",\"parameters\":{\"program\":\"nixguard-remediate\"},\"nixguard\":{\"action\":\"block-ip\",\"target\":\"$TARGET\",\"run\":\"$RUN_ID\",\"result\":\"$1\",\"reason\":\"$2\"}}" >> "$LOG_FILE"
 }
 
 log_msg "Initiating NixGuard remediation active response."
@@ -21,6 +27,11 @@ log_msg "Raw input received: $INPUT_JSON"
 # Extract target and action parameters using jq
 TARGET=$(echo "$INPUT_JSON" | jq -r '.parameters.extra_args[0] // empty')
 ACTION=$(echo "$INPUT_JSON" | jq -r '.parameters.program // .parameters.action // empty')
+# NixGuard's id for this run (extra_args[1]), echoed in the result. Anything not exactly that shape is dropped.
+RUN_ID=$(echo "$INPUT_JSON" | jq -r '.parameters.extra_args[1] // empty')
+if ! [[ "$RUN_ID" =~ ^ngr-[a-f0-9]{16,32}$ ]]; then
+    RUN_ID=""
+fi
 
 if [ -z "$TARGET" ] || [ "$TARGET" = "null" ]; then
     log_msg "Error: No target argument provided in extra_args. Exiting."
@@ -52,12 +63,28 @@ if [ "$IS_IP" = "1" ]; then
     if command -v pfctl >/dev/null 2>&1; then
         # Enable Packet Filter if not already active
         pfctl -e >/dev/null 2>&1
-        
-        # Dynamically inject a block rule without overwriting pf.conf
-        (pfctl -sr 2>/dev/null; echo "block drop quick from $TARGET to any") | pfctl -f - >/dev/null 2>&1
-        log_msg "Successfully blocked IP $TARGET via pfctl."
+
+        # pfctl -sr prints the rule back as "block drop quick inet from <ip> to any". The dots are escaped for grep.
+        RULE_RE="^block drop quick (inet )?from ${TARGET//./\\.} to any\$"
+        if pfctl -sr 2>/dev/null | grep -Eq "$RULE_RE"; then
+            log_msg "Notice: IP $TARGET is already blocked in pf."
+            emit_result success already-blocked
+        else
+            # Dynamically inject a block rule without overwriting pf.conf
+            (pfctl -sr 2>/dev/null; echo "block drop quick from $TARGET to any") | pfctl -f - >/dev/null 2>&1
+            # Read the rule back, so "success" means it is loaded, not only that pfctl returned.
+            if pfctl -sr 2>/dev/null | grep -Eq "$RULE_RE"; then
+                log_msg "Successfully blocked IP $TARGET via pfctl."
+                emit_result success blocked
+            else
+                log_msg "Error: the pf rule for $TARGET is not loaded after adding it."
+                emit_result failure pf-failed
+                exit 1
+            fi
+        fi
     else
         log_msg "Error: pfctl not found. Cannot block IP."
+        emit_result failure no-firewall
         exit 1
     fi
 

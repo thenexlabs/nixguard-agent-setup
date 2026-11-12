@@ -453,6 +453,14 @@ Move-Item -Path $remediateExePath -Destination $destDir -Force
 $remediateSpecPath = Join-Path -Path $env:TEMP -ChildPath "nixguard-remediate.spec"
 Remove-Item -Path $remediateSpecPath -ErrorAction SilentlyContinue
 
+# nixguard-unblock-ip.exe removes a NixGuard IP block (run from the NixGuard app's Unblock)
+$unblockUrl = "https://raw.githubusercontent.com/thenexlabs/nixguard-agent-setup/main/windows/active-response/nixguard-unblock-ip.py"
+$unblockPath = Join-Path -Path $env:TEMP -ChildPath "nixguard-unblock-ip.py"
+Invoke-WebRequest -Uri $unblockUrl -OutFile $unblockPath -UseBasicParsing
+Invoke-Expression -Command "py -m PyInstaller -F $unblockPath"
+Move-Item -Path (Join-Path -Path $env:TEMP -ChildPath "dist\nixguard-unblock-ip.exe") -Destination $destDir -Force
+Remove-Item -Path (Join-Path -Path $env:TEMP -ChildPath "nixguard-unblock-ip.spec") -ErrorAction SilentlyContinue
+
 # Clean up PyInstaller build directories
 $distDir = Join-Path -Path $env:TEMP -ChildPath "dist"
 $buildDir = Join-Path -Path $env:TEMP -ChildPath "build"

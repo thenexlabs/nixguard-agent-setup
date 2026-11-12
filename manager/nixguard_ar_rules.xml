@@ -1,0 +1,52 @@
+<!--
+  NixGuard active response results (optional, recommended). Install on the Wazuh MANAGER, not on endpoints.
+
+  The endpoint scripts (nixguard-remediate, nixguard-unblock-ip) write one result line per IP block or unblock to the
+  agent's active-responses.log, which every Wazuh agent already forwards:
+
+    2026/11/12 10:00:00 active-response/bin/nixguard-remediate: {"version":1,"command":"add","parameters":{"program":"nixguard-remediate"},"nixguard":{"action":"block-ip","target":"203.0.113.7","run":"ngr-...","result":"success","reason":"blocked"}}
+
+  Wazuh's built-in decoder ar_log_json already reads that line, and the built-in rule 657 ("Active response:
+  $(parameters.program) - $(command)", level 3) already turns it into an alert. So NixGuard can confirm results with
+  NO manager change. These child rules of 657 only give the alerts clear descriptions and raise failures to level 7.
+  NixGuard reads data.nixguard.* either way, whichever rule fired.
+
+  Install (as root on the manager):
+    cp nixguard_ar_rules.xml /var/ossec/etc/rules/nixguard_ar_rules.xml
+    chown wazuh:wazuh /var/ossec/etc/rules/nixguard_ar_rules.xml && chmod 660 /var/ossec/etc/rules/nixguard_ar_rules.xml
+    /var/ossec/bin/wazuh-analysisd -t        # must print no error
+    systemctl restart wazuh-manager
+  Check: /var/ossec/bin/wazuh-logtest, paste the example line above, expect rule 100910.
+  IDs 100910-100913 must not be used by another custom rule on that manager.
+-->
+<group name="nixguard,active_response,">
+
+  <rule id="100910" level="3">
+    <if_sid>657</if_sid>
+    <field name="nixguard.action">^block-ip$</field>
+    <field name="nixguard.result">^success$</field>
+    <description>NixGuard: blocked $(nixguard.target) on the endpoint ($(nixguard.reason))</description>
+  </rule>
+
+  <rule id="100911" level="7">
+    <if_sid>657</if_sid>
+    <field name="nixguard.action">^block-ip$</field>
+    <field name="nixguard.result">^failure$</field>
+    <description>NixGuard: could not block $(nixguard.target) on the endpoint ($(nixguard.reason))</description>
+  </rule>
+
+  <rule id="100912" level="3">
+    <if_sid>657</if_sid>
+    <field name="nixguard.action">^unblock-ip$</field>
+    <field name="nixguard.result">^success$</field>
+    <description>NixGuard: unblocked $(nixguard.target) on the endpoint ($(nixguard.reason))</description>
+  </rule>
+
+  <rule id="100913" level="7">
+    <if_sid>657</if_sid>
+    <field name="nixguard.action">^unblock-ip$</field>
+    <field name="nixguard.result">^failure$</field>
+    <description>NixGuard: could not unblock $(nixguard.target) on the endpoint ($(nixguard.reason))</description>
+  </rule>
+
+</group>

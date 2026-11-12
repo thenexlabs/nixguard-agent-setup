@@ -71,6 +71,41 @@ Run from a clone of this repository (`git clone https://github.com/thenexlabs/ni
 | macOS | `sudo bash mac/agent-automatic-remove.sh` |
 | Windows | `.\windows\agent-automatic-remove.ps1` (PowerShell as Administrator) |
 
+### Update the active-response scripts
+
+The setup script downloads the active-response scripts once, at install time; nothing updates them afterwards, and
+re-running setup reinstalls (and re-enrolls) the agent. To get new versions of `nixguard-remediate` and
+`nixguard-unblock-ip` onto an endpoint that is already enrolled, run the update script for its platform (as root or
+Administrator). It replaces only those scripts; the agent keeps its ID and needs no restart.
+
+| Platform | Command |
+| --- | --- |
+| Linux | `curl -fsSLO https://raw.githubusercontent.com/thenexlabs/nixguard-agent-setup/main/linux/update-active-response.sh && sudo bash update-active-response.sh` |
+| macOS | `curl -fsSLO https://raw.githubusercontent.com/thenexlabs/nixguard-agent-setup/main/mac/update-active-response.sh && sudo bash update-active-response.sh` |
+| Windows | `Invoke-WebRequest -Uri https://raw.githubusercontent.com/thenexlabs/nixguard-agent-setup/main/windows/update-active-response.ps1 -OutFile update-active-response.ps1; powershell -ExecutionPolicy Bypass -File .\update-active-response.ps1` |
+
+### IP block results and unblock
+
+`nixguard-remediate` blocks an IPv4 address in the host firewall (iptables or firewalld on Linux, pf on macOS, a
+Windows Firewall rule named `NixGuard Block <ip>`), reads the rule back, and writes one result line to the agent's
+`active-responses.log`, which every Wazuh agent forwards by default:
+
+```text
+2026/11/12 10:00:00 active-response/bin/nixguard-remediate: {"version":1,"command":"add","parameters":{"program":"nixguard-remediate"},"nixguard":{"action":"block-ip","target":"203.0.113.7","run":"ngr-...","result":"success","reason":"blocked"}}
+```
+
+Wazuh's built-in `ar_log_json` decoder and rule 657 turn that line into an alert, so NixGuard confirms the block from
+the alerts index with no change on the manager. `manager/nixguard_ar_rules.xml` (optional) gives these alerts clear
+descriptions and raises failures to level 7; install steps are in the file.
+
+`nixguard-unblock-ip` removes only what `nixguard-remediate` added (iptables rules tagged `nixguard-block`, its exact
+firewalld rich rule, its pf rule, the `NixGuard Block <ip>` Windows rule) and reports the same way. It is a separate
+script, so an endpoint that does not have it does nothing when asked to unblock. Both accept only an IPv4 address.
+
+Checks (no firewall is touched; fakes stand in for iptables, firewall-cmd, pfctl and netsh):
+`bash tests/linux-active-response.test.sh`, `bash tests/mac-active-response.test.sh`,
+`python3 -m unittest discover -s tests -p "test_*.py"`.
+
 ### Verify the agent is running
 
 - Linux: `systemctl status wazuh-agent` (logs: `journalctl -u wazuh-agent`)
@@ -84,7 +119,7 @@ Run from a clone of this repository (`git clone https://github.com/thenexlabs/ni
 | Wazuh agent | 4.9.1 (`.deb` / `.rpm`), service `wazuh-agent` | 4.7.4 (`.pkg`), installed under `/Library/Ossec` | 4.9.1 (`.msi`), service `WazuhSvc` |
 | Extra packages | `curl`, `jq`, `wget`, `auditd` (`audit` on RHEL family) | `jq` via Homebrew if missing | Python 3.12.4 (all users) and PyInstaller, used to build the active-response `.exe` files |
 | Encryption check (if your compliance standards require it) | `luks_check.sh` via root cron every 10 minutes | `filevault_check.sh` via LaunchDaemon `com.nixguard.filevaultcheck` every 5 minutes | `bitlocker_check.ps1` via scheduled task `Wazuh-BitLocker-Check` every 5 minutes, as SYSTEM |
-| Active response | `remove-threat.sh`, `nixguard-remediate.sh` | `remove-threat.sh`, `nixguard-remediate.sh` | `remove-threat.exe`, `nixguard-remediate.exe` |
+| Active response | `remove-threat.sh`, `nixguard-remediate.sh`, `nixguard-unblock-ip.sh` | `remove-threat.sh`, `nixguard-remediate.sh`, `nixguard-unblock-ip.sh` | `remove-threat.exe`, `nixguard-remediate.exe`, `nixguard-unblock-ip.exe` |
 | Config | Rewrites the `<syscheck>` block in `ossec.conf` (backup saved alongside) | Appends FIM tuning to `ossec.conf` | Adds FIM directories and tuning to `ossec.conf` |
 
 **Network:** the agent connects outbound to your NixGuard manager using the standard Wazuh agent ports (1514/TCP for events, 1515/TCP for enrollment; the scripts do not change them). During setup the scripts also make HTTPS requests to `packages.wazuh.com`, `raw.githubusercontent.com` (this repository) and on Windows `python.org` and PyPI. No inbound ports are opened.
@@ -94,9 +129,11 @@ Run from a clone of this repository (`git clone https://github.com/thenexlabs/ni
 ## Repository layout
 
 ```text
-linux/    agent-automatic-setup.sh, agent-automatic-remove.sh, active-response/
-mac/      agent-automatic-setup.sh, agent-automatic-remove.sh, active-response/
-windows/  agent-automatic-setup.ps1, agent-automatic-remove.ps1, active-response/
+linux/    agent-automatic-setup.sh, agent-automatic-remove.sh, update-active-response.sh, active-response/
+mac/      agent-automatic-setup.sh, agent-automatic-remove.sh, update-active-response.sh, active-response/
+windows/  agent-automatic-setup.ps1, agent-automatic-remove.ps1, update-active-response.ps1, active-response/
+manager/  nixguard_ar_rules.xml (optional Wazuh manager rules for active-response results)
+tests/    checks for the IP block and unblock scripts
 ```
 
 ## Security

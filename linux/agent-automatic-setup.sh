@@ -227,6 +227,14 @@ install_wazuh_agent() {
         sudo chown root:wazuh "$arDir/nixguard-remediate.sh"
     fi
 
+    # Removes a NixGuard IP block (run from the NixGuard app's Unblock).
+    local unblockUrl="https://raw.githubusercontent.com/thenexlabs/nixguard-agent-setup/main/linux/active-response/nixguard-unblock-ip.sh"
+    sudo wget -q -O "$arDir/nixguard-unblock-ip.sh" "$unblockUrl" || true
+    if [ -f "$arDir/nixguard-unblock-ip.sh" ]; then
+        sudo chmod 750 "$arDir/nixguard-unblock-ip.sh"
+        sudo chown root:wazuh "$arDir/nixguard-unblock-ip.sh"
+    fi
+
     # STEP 4: SERVICE RESTART & HEALTH CHECK
     sudo systemctl daemon-reload
     sudo systemctl enable wazuh-agent

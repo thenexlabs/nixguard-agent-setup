@@ -1,10 +1,18 @@
 #!/bin/bash
 # Wazuh Active Response script for general OS-level remediation on Linux.
 
-LOG_FILE="/var/ossec/logs/active-responses.log"
+LOG_FILE="${NIXGUARD_AR_LOG:-/var/ossec/logs/active-responses.log}"
 
 log_msg() {
     echo "$(date '+%Y/%m/%d %H:%M:%S') nixguard-remediate: $1" >> "$LOG_FILE"
+}
+
+# The block result NixGuard reads back. The line has the shape Wazuh's built-in ar_log_json decoder reads
+# ("<date> active-response/bin/<name>: <json>") and "command" lets the stock rule 657 raise an alert, so the result
+# reaches the alerts index with no change on the manager (nixguard_ar_rules.xml only names it better). Every value
+# is a validated IPv4 address, a run id of [a-f0-9-] or a fixed reason word, so nothing needs JSON escaping.
+emit_result() { # <success|failure> <reason>
+    echo "$(date '+%Y/%m/%d %H:%M:%S') active-response/bin/nixguard-remediate: {\"version\":1,\"command\":\"add\",\"parameters\":{\"program\":\"nixguard-remediate\"},\"nixguard\":{\"action\":\"block-ip\",\"target\":\"$TARGET\",\"run\":\"$RUN_ID\",\"result\":\"$1\",\"reason\":\"$2\"}}" >> "$LOG_FILE"
 }
 
 log_msg "Initiating NixGuard remediation active response."
@@ -21,6 +29,12 @@ log_msg "Raw input received: $INPUT_JSON"
 # Extract target and action parameters using jq
 TARGET=$(echo "$INPUT_JSON" | jq -r '.parameters.extra_args[0] // empty')
 ACTION=$(echo "$INPUT_JSON" | jq -r '.parameters.program // .parameters.action // empty')
+# NixGuard's id for this run (extra_args[1]), echoed in the result so the app matches the result to the run. Anything
+# not exactly that shape is dropped.
+RUN_ID=$(echo "$INPUT_JSON" | jq -r '.parameters.extra_args[1] // empty')
+if ! [[ "$RUN_ID" =~ ^ngr-[a-f0-9]{16,32}$ ]]; then
+    RUN_ID=""
+fi
 
 if [ -z "$TARGET" ] || [ "$TARGET" = "null" ]; then
     log_msg "Error: No target argument provided in extra_args. Exiting."
@@ -52,27 +66,49 @@ if [ "$IS_IP" = "1" ]; then
     if command -v iptables >/dev/null 2>&1; then
         # NixGuard's own rule carries a comment, so it differs from the plain "-s IP -j DROP" rule that Wazuh's
         # timed firewall-drop adds and later deletes. Without it, a block found "already in place" vanished
-        # when firewall-drop's timeout expired.
+        # when firewall-drop's timeout expired. nixguard-unblock-ip removes rules by this comment.
         MARK="nixguard-block"
-        if ! iptables -C INPUT -s "$TARGET" -m comment --comment "$MARK" -j DROP >/dev/null 2>&1; then
-            if iptables -I INPUT -s "$TARGET" -m comment --comment "$MARK" -j DROP 2>/dev/null; then
-                iptables -I FORWARD -s "$TARGET" -m comment --comment "$MARK" -j DROP 2>/dev/null
-                log_msg "Successfully blocked IP $TARGET via iptables (rule tagged $MARK)."
-            else
-                # No comment module: fall back to a plain rule.
-                iptables -I INPUT -s "$TARGET" -j DROP
-                iptables -I FORWARD -s "$TARGET" -j DROP
-                log_msg "Successfully blocked IP $TARGET via iptables (untagged: comment module unavailable)."
-            fi
-        else
+        if iptables -C INPUT -s "$TARGET" -m comment --comment "$MARK" -j DROP >/dev/null 2>&1; then
             log_msg "Notice: IP $TARGET is already blocked by NixGuard in iptables."
+            emit_result success already-blocked
+        elif iptables -I INPUT -s "$TARGET" -m comment --comment "$MARK" -j DROP 2>/dev/null; then
+            iptables -I FORWARD -s "$TARGET" -m comment --comment "$MARK" -j DROP 2>/dev/null
+            # Read the rule back, so "success" means the rule is in place, not only that the command returned.
+            if iptables -C INPUT -s "$TARGET" -m comment --comment "$MARK" -j DROP >/dev/null 2>&1; then
+                log_msg "Successfully blocked IP $TARGET via iptables (rule tagged $MARK)."
+                emit_result success blocked
+            else
+                log_msg "Error: the iptables rule for $TARGET is not in place after adding it."
+                emit_result failure rule-missing
+                exit 1
+            fi
+        elif iptables -I INPUT -s "$TARGET" -j DROP 2>/dev/null && iptables -C INPUT -s "$TARGET" -j DROP >/dev/null 2>&1; then
+            # No comment module: fall back to a plain rule (nixguard-unblock-ip cannot tell it from firewall-drop's).
+            iptables -I FORWARD -s "$TARGET" -j DROP 2>/dev/null
+            log_msg "Successfully blocked IP $TARGET via iptables (untagged: comment module unavailable)."
+            emit_result success blocked-untagged
+        else
+            log_msg "Error: iptables could not add a rule for $TARGET."
+            emit_result failure iptables-failed
+            exit 1
         fi
     elif command -v firewall-cmd >/dev/null 2>&1; then
-        firewall-cmd --permanent --add-rich-rule="rule family='ipv4' source address='$TARGET' reject" >/dev/null 2>&1
-        firewall-cmd --reload >/dev/null 2>&1
-        log_msg "Successfully blocked IP $TARGET via firewalld."
+        RICH_RULE="rule family='ipv4' source address='$TARGET' reject"
+        if firewall-cmd --permanent --query-rich-rule="$RICH_RULE" >/dev/null 2>&1; then
+            log_msg "Notice: IP $TARGET is already blocked in firewalld."
+            emit_result success already-blocked
+        elif firewall-cmd --permanent --add-rich-rule="$RICH_RULE" >/dev/null 2>&1 && firewall-cmd --reload >/dev/null 2>&1 \
+            && firewall-cmd --query-rich-rule="$RICH_RULE" >/dev/null 2>&1; then
+            log_msg "Successfully blocked IP $TARGET via firewalld."
+            emit_result success blocked
+        else
+            log_msg "Error: firewalld could not add a rule for $TARGET."
+            emit_result failure firewalld-failed
+            exit 1
+        fi
     else
         log_msg "Error: Neither iptables nor firewalld found. Cannot block IP."
+        emit_result failure no-firewall
         exit 1
     fi
 
