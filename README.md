@@ -95,8 +95,9 @@ Windows Firewall rule named `NixGuard Block <ip>`), reads the rule back, and wri
 ```
 
 Wazuh's built-in `ar_log_json` decoder and rule 657 turn that line into an alert, so NixGuard confirms the block from
-the alerts index with no change on the manager. `manager/nixguard_ar_rules.xml` (optional) gives these alerts clear
-descriptions and raises failures to level 7; install steps are in the file.
+the alerts index. Rule 657 is level 3, and a manager whose `log_alert_level` is 4 or more (NixGuard-provisioned
+managers use 4) never stores it, so install `manager/nixguard_ar_rules.xml` on the manager: it raises the results to
+level 5 (success) and 7 (failure). Install steps are in the file.
 
 `nixguard-unblock-ip` removes only what `nixguard-remediate` added (iptables rules tagged `nixguard-block`, its exact
 firewalld rich rule, its pf rule, the `NixGuard Block <ip>` Windows rule) and reports the same way. It is a separate
@@ -104,7 +105,7 @@ script, so an endpoint that does not have it does nothing when asked to unblock.
 
 Checks (no firewall is touched; fakes stand in for iptables, firewall-cmd, pfctl and netsh):
 `bash tests/linux-active-response.test.sh`, `bash tests/mac-active-response.test.sh`,
-`python3 -m unittest discover -s tests -p "test_*.py"`.
+`python3 -m unittest discover -s tests -p "test_*.py"`, `python3 tests/manager-rules.test.py` (manager rule levels).
 
 ### Verify the agent is running
 
@@ -132,7 +133,7 @@ Checks (no firewall is touched; fakes stand in for iptables, firewall-cmd, pfctl
 linux/    agent-automatic-setup.sh, agent-automatic-remove.sh, update-active-response.sh, active-response/
 mac/      agent-automatic-setup.sh, agent-automatic-remove.sh, update-active-response.sh, active-response/
 windows/  agent-automatic-setup.ps1, agent-automatic-remove.ps1, update-active-response.ps1, active-response/
-manager/  nixguard_ar_rules.xml (optional Wazuh manager rules for active-response results)
+manager/  nixguard_ar_rules.xml (Wazuh manager rules that store active-response results at level 5 and 7)
 tests/    checks for the IP block and unblock scripts
 ```
 
