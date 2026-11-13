@@ -249,17 +249,21 @@ fix_rsyslog_file_mode() {
     esac
 }
 
-# CIS: sudo keeps its own log file. Validated with visudo -c; a sudoers file that does not parse is removed again.
+# CIS: sudo keeps its own log file. The line goes in /etc/sudoers itself: the CIS policy's rule for /etc/sudoers.d gives
+# the file name as "\.*" without "r:", so SCA looks for a file literally named that and only /etc/sudoers can pass
+# (lab, 2026-11-13). /etc/sudoers is saved first; if the result does not pass visudo -c it is put back unchanged.
+SUDO_LINE='Defaults logfile=/var/log/sudo.log'
 fix_sudo_logfile() {
-    local path="/etc/sudoers.d/$PREFIX-logfile"
     command -v visudo >/dev/null 2>&1 || return 3
+    [ -e "$R/etc/sudoers" ] || return 3
     case "$1" in
         apply)
-            own_file sudo-logfile "$path" 440 "# NixGuard endpoint hardening (sudo-logfile).
-Defaults logfile=/var/log/sudo.log"
-            if ! visudo -c -q -f "$R$path" >/dev/null 2>&1 || ! visudo -c -q >/dev/null 2>&1; then restore_files sudo-logfile; return 4; fi ;;
+            grep -qx "$SUDO_LINE" "$R/etc/sudoers" && return 0
+            save_file sudo-logfile /etc/sudoers
+            printf '\n# NixGuard endpoint hardening (sudo-logfile). Undo it from the NixGuard app.\n%s\n' "$SUDO_LINE" >> "$R/etc/sudoers"
+            if ! visudo -c -q >/dev/null 2>&1; then restore_files sudo-logfile; forget sudo-logfile; return 4; fi ;;
         undo) restore_files sudo-logfile ;;
-        check) grep -qx 'Defaults logfile=/var/log/sudo.log' "$R$path" 2>/dev/null ;;
+        check) grep -qx "$SUDO_LINE" "$R/etc/sudoers" ;;
     esac
 }
 
@@ -284,7 +288,9 @@ audit_rules() {
     echo "-a always,exit -F arch=b64 -S mount -F auid>=$uid_min -F auid!=unset -k mounts"
     echo "-a always,exit -F arch=b32 -S mount -F auid>=$uid_min -F auid!=unset -k mounts"
     for p in /var/run/utmp /var/log/wtmp /var/log/btmp; do [ -e "$R$p" ] && echo "-w $p -p wa -k session"; done
-    for p in /var/log/lastlog /var/run/faillock; do [ -e "$R$p" ] && echo "-w $p -p wa -k logins"; done
+    [ -e "$R/var/log/lastlog" ] && echo "-w /var/log/lastlog -p wa -k logins"
+    # pam_faillock creates /var/run/faillock on the first failed login; audit can watch a path that does not exist yet.
+    [ -d "$R/var/run" ] && echo "-w /var/run/faillock -p wa -k logins"
     for p in /etc/apparmor /etc/apparmor.d; do [ -e "$R$p" ] && echo "-w $p -p wa -k MAC-policy"; done
     for w in /usr/bin/chcon /usr/bin/setfacl /usr/bin/chacl; do [ -e "$R$w" ] && echo "-a always,exit -F path=$w -F perm=x -F auid>=$uid_min -F auid!=unset -k perm_chng"; done
     [ -e "$R/usr/sbin/usermod" ] && echo "-a always,exit -F path=/usr/sbin/usermod -F perm=x -F auid>=$uid_min -F auid!=unset -k usermod"

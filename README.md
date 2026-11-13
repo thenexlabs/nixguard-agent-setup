@@ -125,7 +125,7 @@ Assessment (SCA) reports as failed. The NixGuard app runs it as `!nixguard-harde
 | `login-banners` | `/etc/issue` and `/etc/issue.net` without OS details | 35547, 35548 |
 | `apport-off` | Automatic error reporting off (`/etc/default/apport`, `apport.service`) | 35545 |
 | `rsyslog-file-mode` | `/etc/rsyslog.d/60-nixguard.conf`: `$FileCreateMode 0640` | 35719 |
-| `sudo-logfile` | `/etc/sudoers.d/60-nixguard-logfile`: sudo's own log file. Checked with `visudo -c` | 35664 |
+| `sudo-logfile` | Adds `Defaults logfile=/var/log/sudo.log` to `/etc/sudoers` (saved first; put back if `visudo -c` fails). Not in `/etc/sudoers.d`: the CIS policy's rule for that directory never matches (its file pattern lacks `r:`) | 35664 |
 | `audit-rules` | `/etc/audit/rules.d/60-nixguard.rules`: audit rules for sudoers, the sudo log, time, network environment, identity files, mounts, sessions, logins, AppArmor, chcon/setfacl/chacl/usermod and kernel modules. Never `-e 2`. Not the noisy rules (every failed access or deletion) | 35731, 35733-35735, 35737, 35739-35741, 35743-35748 |
 
 Each fix saves what it changes the first time it runs (`/var/ossec/nixguard-harden/<fix id>/`), so undo puts back
