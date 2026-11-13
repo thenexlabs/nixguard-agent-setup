@@ -14,7 +14,7 @@ if [ "$(id -u)" != "0" ]; then echo "Run as root (sudo)." >&2; exit 1; fi
 if [ ! -d "$AR_DIR" ]; then echo "$AR_DIR not found: install the NixGuard agent first (agent-automatic-setup.sh)." >&2; exit 1; fi
 command -v jq >/dev/null 2>&1 || echo "WARNING: jq is missing; the scripts need it (apt-get install jq / yum install jq)." >&2
 
-for script in nixguard-remediate.sh nixguard-unblock-ip.sh; do
+for script in nixguard-remediate.sh nixguard-unblock-ip.sh nixguard-harden.sh; do
     tmp=$(mktemp)
     # Download to a temp file first, so a failed download never leaves a half-written script in place.
     if curl -fsSL -o "$tmp" "$BASE_URL/$script" && bash -n "$tmp"; then

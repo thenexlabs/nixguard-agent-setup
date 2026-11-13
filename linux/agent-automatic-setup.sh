@@ -235,6 +235,14 @@ install_wazuh_agent() {
         sudo chown root:wazuh "$arDir/nixguard-unblock-ip.sh"
     fi
 
+    # Applies or undoes one named endpoint hardening fix (run from the NixGuard app's Hardening).
+    local hardenUrl="https://raw.githubusercontent.com/thenexlabs/nixguard-agent-setup/main/linux/active-response/nixguard-harden.sh"
+    sudo wget -q -O "$arDir/nixguard-harden.sh" "$hardenUrl" || true
+    if [ -f "$arDir/nixguard-harden.sh" ]; then
+        sudo chmod 750 "$arDir/nixguard-harden.sh"
+        sudo chown root:wazuh "$arDir/nixguard-harden.sh"
+    fi
+
     # STEP 4: SERVICE RESTART & HEALTH CHECK
     sudo systemctl daemon-reload
     sudo systemctl enable wazuh-agent
