@@ -20,7 +20,7 @@
     systemctl restart wazuh-manager
   Check: /var/ossec/bin/wazuh-logtest, paste the example line above, expect rule id 100910, level 5, and
   "Alert to be generated".
-  IDs 100910-100913 must not be used by another custom rule on that manager. A manager whose log_alert_level is above
+  IDs 100910-100917 must not be used by another custom rule on that manager. A manager whose log_alert_level is above
   5 still drops the success results: raise these levels to match it rather than lowering the threshold.
 -->
 <group name="nixguard,active_response,">
@@ -51,6 +51,35 @@
     <field name="nixguard.action">^unblock-ip$</field>
     <field name="nixguard.result">^failure$</field>
     <description>NixGuard: could not unblock $(nixguard.target) on the endpoint ($(nixguard.reason))</description>
+  </rule>
+
+  <!-- Endpoint hardening (nixguard-harden): target is the fix id, e.g. sshd-limits. -->
+  <rule id="100914" level="5">
+    <if_sid>657</if_sid>
+    <field name="nixguard.action">^harden$</field>
+    <field name="nixguard.result">^success$</field>
+    <description>NixGuard: applied hardening fix $(nixguard.target) on the endpoint ($(nixguard.reason))</description>
+  </rule>
+
+  <rule id="100915" level="7">
+    <if_sid>657</if_sid>
+    <field name="nixguard.action">^harden$</field>
+    <field name="nixguard.result">^failure$</field>
+    <description>NixGuard: could not apply hardening fix $(nixguard.target) on the endpoint ($(nixguard.reason))</description>
+  </rule>
+
+  <rule id="100916" level="5">
+    <if_sid>657</if_sid>
+    <field name="nixguard.action">^unharden$</field>
+    <field name="nixguard.result">^success$</field>
+    <description>NixGuard: undid hardening fix $(nixguard.target) on the endpoint ($(nixguard.reason))</description>
+  </rule>
+
+  <rule id="100917" level="7">
+    <if_sid>657</if_sid>
+    <field name="nixguard.action">^unharden$</field>
+    <field name="nixguard.result">^failure$</field>
+    <description>NixGuard: could not undo hardening fix $(nixguard.target) on the endpoint ($(nixguard.reason))</description>
   </rule>
 
 </group>

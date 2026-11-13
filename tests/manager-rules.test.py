@@ -14,7 +14,7 @@ with open(os.path.join(ROOT, "manager", "nixguard_ar_rules.xml"), encoding="utf-
 
 failures = []
 rules = {r.get("id"): r for r in tree.iter("rule")}
-if sorted(rules) != ["100910", "100911", "100912", "100913"]:
+if sorted(rules) != [str(i) for i in range(100910, 100918)]:
     failures.append(f"unexpected rule ids {sorted(rules)}")
 for rule_id, rule in rules.items():
     level = int(rule.get("level"))

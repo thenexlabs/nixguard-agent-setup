@@ -74,8 +74,8 @@ Run from a clone of this repository (`git clone https://github.com/thenexlabs/ni
 ### Update the active-response scripts
 
 The setup script downloads the active-response scripts once, at install time; nothing updates them afterwards, and
-re-running setup reinstalls (and re-enrolls) the agent. To get new versions of `nixguard-remediate` and
-`nixguard-unblock-ip` onto an endpoint that is already enrolled, run the update script for its platform (as root or
+re-running setup reinstalls (and re-enrolls) the agent. To get new versions of `nixguard-remediate`,
+`nixguard-unblock-ip` and (Linux) `nixguard-harden` onto an endpoint that is already enrolled, run the update script for its platform (as root or
 Administrator). It replaces only those scripts; the agent keeps its ID and needs no restart.
 
 | Platform | Command |
@@ -107,6 +107,36 @@ Checks (no firewall is touched; fakes stand in for iptables, firewall-cmd, pfctl
 `bash tests/linux-active-response.test.sh`, `bash tests/mac-active-response.test.sh`,
 `python3 -m unittest discover -s tests -p "test_*.py"`, `python3 tests/manager-rules.test.py` (manager rule levels).
 
+### Endpoint hardening (Linux: Debian and Ubuntu)
+
+`nixguard-harden` applies or undoes one named fix for CIS benchmark checks that Wazuh's Security Configuration
+Assessment (SCA) reports as failed. The NixGuard app runs it as `!nixguard-harden.sh` with extra_args
+`[apply|undo, <fix id>, <run id>]`. It knows only these fixes; any other id is refused:
+
+| Fix id | What it changes | CIS checks (Ubuntu 24.04 ids) |
+| --- | --- | --- |
+| `net-redirects` | `/etc/sysctl.d/60-nixguard-network.conf`: no ICMP or packet redirects, no source routing, log martians. For hosts that are not routers | 35609, 35612, 35613, 35615, 35616 |
+| `net-rp-filter` | `/etc/sysctl.d/60-nixguard-rp-filter.conf`: strict reverse path filtering. Not for multi-homed hosts with asymmetric routes | 35614 |
+| `core-dumps` | `fs.suid_dumpable = 0` and `* hard core 0` in their own files | 35543 |
+| `kernel-modules` | `/etc/modprobe.d/60-nixguard-net-modules.conf`: dccp, tipc, rds, sctp not loadable. Refused while one is loaded | 35604-35607 |
+| `cron-permissions` | `/etc/crontab` 600, cron directories 700, owned by root | 35594-35599 |
+| `sshd-config-permissions` | `/etc/ssh/sshd_config` 600, owned by root | 35640 |
+| `sshd-limits` | `/etc/ssh/sshd_config.d/00-nixguard-hardening.conf`: MaxAuthTries 4, LoginGraceTime 60, MaxStartups 10:30:60, ClientAliveInterval 15, ClientAliveCountMax 3. Checked with `sshd -t` before reload. Never changes who may log in. A client that offers more than 4 keys needs `IdentitiesOnly` | 35646, 35652, 35655, 35657 |
+| `login-banners` | `/etc/issue` and `/etc/issue.net` without OS details | 35547, 35548 |
+| `apport-off` | Automatic error reporting off (`/etc/default/apport`, `apport.service`) | 35545 |
+| `rsyslog-file-mode` | `/etc/rsyslog.d/60-nixguard.conf`: `$FileCreateMode 0640` | 35719 |
+| `sudo-logfile` | `/etc/sudoers.d/60-nixguard-logfile`: sudo's own log file. Checked with `visudo -c` | 35664 |
+| `audit-rules` | `/etc/audit/rules.d/60-nixguard.rules`: audit rules for sudoers, the sudo log, time, network environment, identity files, mounts, sessions, logins, AppArmor, chcon/setfacl/chacl/usermod and kernel modules. Never `-e 2`. Not the noisy rules (every failed access or deletion) | 35731, 35733-35735, 35737, 35739-35741, 35743-35748 |
+
+Each fix saves what it changes the first time it runs (`/var/ossec/nixguard-harden/<fix id>/`), so undo puts back
+exactly what was there. It reads its change back and writes one result line like the IP block does (action `harden` or
+`unharden`, target the fix id), which manager rules 100914-100917 store. The SCA score changes at the agent's next SCA
+scan; restarting the agent scans right away. On the lab endpoint (Ubuntu 24.04, 2026-11-13) these fixes cover 41 of its
+134 failed checks.
+
+Checks: `bash tests/linux-harden.test.sh` (a fake root and fake system commands; applying every fix and undoing every
+fix must leave the fake root byte for byte as it was).
+
 ### Verify the agent is running
 
 - Linux: `systemctl status wazuh-agent` (logs: `journalctl -u wazuh-agent`)
@@ -120,7 +150,7 @@ Checks (no firewall is touched; fakes stand in for iptables, firewall-cmd, pfctl
 | Wazuh agent | 4.9.1 (`.deb` / `.rpm`), service `wazuh-agent` | 4.7.4 (`.pkg`), installed under `/Library/Ossec` | 4.9.1 (`.msi`), service `WazuhSvc` |
 | Extra packages | `curl`, `jq`, `wget`, `auditd` (`audit` on RHEL family) | `jq` via Homebrew if missing | Python 3.12.4 (all users) and PyInstaller, used to build the active-response `.exe` files |
 | Encryption check (if your compliance standards require it) | `luks_check.sh` via root cron every 10 minutes | `filevault_check.sh` via LaunchDaemon `com.nixguard.filevaultcheck` every 5 minutes | `bitlocker_check.ps1` via scheduled task `Wazuh-BitLocker-Check` every 5 minutes, as SYSTEM |
-| Active response | `remove-threat.sh`, `nixguard-remediate.sh`, `nixguard-unblock-ip.sh` | `remove-threat.sh`, `nixguard-remediate.sh`, `nixguard-unblock-ip.sh` | `remove-threat.exe`, `nixguard-remediate.exe`, `nixguard-unblock-ip.exe` |
+| Active response | `remove-threat.sh`, `nixguard-remediate.sh`, `nixguard-unblock-ip.sh`, `nixguard-harden.sh` | `remove-threat.sh`, `nixguard-remediate.sh`, `nixguard-unblock-ip.sh` | `remove-threat.exe`, `nixguard-remediate.exe`, `nixguard-unblock-ip.exe` |
 | Config | Rewrites the `<syscheck>` block in `ossec.conf` (backup saved alongside) | Appends FIM tuning to `ossec.conf` | Adds FIM directories and tuning to `ossec.conf` |
 
 **Network:** the agent connects outbound to your NixGuard manager using the standard Wazuh agent ports (1514/TCP for events, 1515/TCP for enrollment; the scripts do not change them). During setup the scripts also make HTTPS requests to `packages.wazuh.com`, `raw.githubusercontent.com` (this repository) and on Windows `python.org` and PyPI. No inbound ports are opened.
