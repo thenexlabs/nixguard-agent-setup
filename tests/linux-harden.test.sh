@@ -131,7 +131,9 @@ expect "sshd_config untouched" "PermitRootLogin yes" "$(tail -1 "$FAKE_ROOT/etc/
 expect "banner" "Authorized users only. All activity may be monitored and reported." "$(cat "$FAKE_ROOT/etc/issue")"
 expect "apport file" "enabled=0" "$(grep '^enabled' "$FAKE_ROOT/etc/default/apport")"
 expect "apport service" "disabled" "$(cat "$FAKE_STATE/apport")"
-expect "sudoers mode" "440" "$(stat -c %a "$FAKE_ROOT/etc/sudoers.d/60-nixguard-logfile")"
+expect "sudoers mode kept" "440" "$(stat -c %a "$FAKE_ROOT/etc/sudoers")"
+expect "sudo log line in /etc/sudoers" "1" "$(grep -cx "Defaults logfile=/var/log/sudo.log" "$FAKE_ROOT/etc/sudoers")"
+expect "faillock watched even before it exists" "1" "$(grep -c -- "-w /var/run/faillock -p wa -k logins" "$FAKE_ROOT/etc/audit/rules.d/60-nixguard.rules")"
 expect "audit keys loaded" "12" "$(grep -oE -- '-k [A-Za-z_-]+' "$FAKE_STATE/audit.loaded" | sort -u | grep -vc existing)"
 expect "audit never immutable" "0" "$(grep -c -- '^-e' "$FAKE_STATE/audit.loaded")"
 expect "existing audit rules kept" "1" "$(grep -c -- '-k existing' "$FAKE_STATE/audit.loaded")"
@@ -167,7 +169,7 @@ LOADED_MODULE=sctp; expect "module in use" "failure module-in-use" "$(run apply 
 SSHD_INVALID=1; expect "sshd -t fails" "failure did-not-validate" "$(run apply sshd-limits)"; SSHD_INVALID=0
 expect "sshd drop-in removed" "absent" "$([ -e "$FAKE_ROOT/etc/ssh/sshd_config.d/00-nixguard-hardening.conf" ] && echo present || echo absent)"
 VISUDO_INVALID=1; expect "visudo fails" "failure did-not-validate" "$(run apply sudo-logfile)"; VISUDO_INVALID=0
-expect "sudoers file removed" "absent" "$([ -e "$FAKE_ROOT/etc/sudoers.d/60-nixguard-logfile" ] && echo present || echo absent)"
+expect "sudoers unchanged after visudo fails" "root ALL=(ALL:ALL) ALL" "$(cat "$FAKE_ROOT/etc/sudoers")"
 AUDIT_ENABLED=2; expect "audit immutable" "failure audit-immutable" "$(run apply audit-rules)"; AUDIT_ENABLED=1
 printf 'ID=ubuntu\nID_LIKE=debian\n' > "$FAKE_ROOT/etc/os-release"
 expect "refusals changed nothing" "same" "$([ "$(tree_of "$FAKE_ROOT")" = "$before" ] && echo same || echo different)"
